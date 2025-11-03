@@ -24,7 +24,7 @@ from src.trading.risk_manager import RiskManager
 from src.ai.deepseek_client import DeepSeekClient
 from src.ai.prompt_builder import PromptBuilder
 from src.ai.decision_parser import DecisionParser
-
+from src.utils.symbol_filters import SymbolFilters
 
 class TradingBot:
     """交易机器人主类"""
@@ -61,7 +61,9 @@ class TradingBot:
         print(f"✅ 交易执行器初始化完成")
         
         # AI组件
-        self.prompt_builder = PromptBuilder(self.config)
+        symbols = ConfigLoader.get_trading_symbols(self.config)
+        precision_map = self._build_precision_map(symbols)
+        self.prompt_builder = PromptBuilder(self.config,precision_map)
         self.decision_parser = DecisionParser()
         print(f"✅ AI组件初始化完成")
         
@@ -73,6 +75,15 @@ class TradingBot:
         print("🎉 AI交易机器人启动成功！")
         print("=" * 60)
         print()
+    
+    def _build_precision_map(self, symbols: list[str]) -> Dict[str, Dict[str, int]]:
+        pm: Dict[str, Dict[str, int]] = {}
+        for sym in symbols:
+            f: SymbolFilters = self.client.get_symbol_filters(sym)  # 內含 tickSize/stepSize
+            price_dp = PromptBuilder._decimals_from_step(getattr(f, "tickSize", None), default_dp=2)
+            qty_dp = PromptBuilder._decimals_from_step(getattr(f, "stepSize", None), default_dp=4)
+            pm[sym] = {"price_dp": price_dp, "qty_dp": qty_dp}
+        return pm
     
     def _init_binance_client(self) -> BinanceClient:
         """初始化Binance客户端（正式网）"""
@@ -233,7 +244,7 @@ class TradingBot:
                 confidence = 0.5
         
         # 如果信心度太低，不执行
-        if confidence < 0.3 and action != 'CLOSE':
+        if confidence < 0.5 and action != 'CLOSE':
             print(f"⚠️ {symbol} 信心度太低({confidence:.2f})，跳过执行")
             return
         

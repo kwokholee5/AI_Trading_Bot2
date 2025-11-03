@@ -373,9 +373,6 @@ class BinanceClient:
             创建的订单列表
         """
         orders = []
-        print(f"\n🧩 [DEBUG] set_take_profit_stop_loss() called for {symbol}")
-        print(f"    ↳ side: {side}, qty: {quantity}")
-        print(f"    ↳ take_profit_price: {take_profit_price}, stop_loss_price: {stop_loss_price}")
         try:
             # 设置止盈
             if take_profit_price:

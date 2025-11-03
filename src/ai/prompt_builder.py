@@ -6,12 +6,36 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import math
 import json
-
+from decimal import Decimal, InvalidOperation
 
 class PromptBuilder:
     """提示詞構建器（支援 JSON 輸出）"""
 
-    def __init__(self, config: Dict[str, Any]):
+    @staticmethod
+    def _decimals_from_step(step, default_dp: int = 2) -> int:
+        """
+        Derive number of decimal places from a tick/step value.
+        Works with strings like '0.01000000' or scientific '1e-6', and floats.
+        Returns default_dp if step is missing/invalid/non-positive.
+        """
+        if step is None:
+            return default_dp
+        try:
+            # Always go through str() to preserve precision (e.g. '1e-6')
+            d = Decimal(str(step))
+            if d <= 0:
+                return default_dp
+            # Decimal exponent is negative for decimals; -exponent == number of dp
+            # Example: 0.01 -> exponent -2 -> dp 2; 1E-6 -> exponent -6 -> dp 6
+            dp = max(0, -d.as_tuple().exponent)
+            # Optional safety clamp
+            if dp > 18:
+                dp = 18
+            return int(dp)
+        except (InvalidOperation, ValueError, TypeError):
+            return default_dp
+        
+    def __init__(self, config: Dict[str, Any] , precision_map:Dict[str, Dict[str, int]]):
         """
         初始化提示詞構建器
         Args:
@@ -19,9 +43,12 @@ class PromptBuilder:
         """
         self.config = config
         self.ai_config = config.get("ai", {})
-
         # 預設的時間框架輸出順序（只輸出存在於資料中的）
         self.default_intervals = ["5m", "15m", "1h", "4h", "1D"]
+
+        # === 新增：每個 symbol 的精度表 ===
+        # 結構：{"BTCUSDT": {"price_dp": 2, "qty_dp": 6}, ...}
+        self.symbol_precisions = precision_map
 
     # ---------------------------
     # 小工具：數值安全處理 / 取值 / 四捨五入
@@ -86,6 +113,24 @@ class PromptBuilder:
                 pass
         return 0.5
 
+    def _price_dp(self, symbol: str, fallback: int = 2) -> int:
+        return int(self.symbol_precisions.get(symbol, {}).get("price_dp", fallback))
+
+    def _qty_dp(self, symbol: str, fallback: int = 4) -> int:
+        return int(self.symbol_precisions.get(symbol, {}).get("qty_dp", fallback))
+
+    def _round_price(self, symbol: str, x: Any) -> float:
+        try:
+            return round(float(x), self._price_dp(symbol))
+        except Exception:
+            return 0.0
+
+    def _round_qty(self, symbol: str, x: Any) -> float:
+        try:
+            return round(float(x), self._qty_dp(symbol))
+        except Exception:
+            return 0.0
+
     # ---------------------------
     # 歷史決策分組：按幣種歸檔（舊→新）
     # ---------------------------
@@ -124,7 +169,6 @@ class PromptBuilder:
 
         # 對每個幣種：只保留最後 N 筆（最近 N 筆），但輸出順序仍舊→新
         for sym, arr in buckets.items():
-            # arr 此時為舊→新；保留最後 N 筆
             trimmed = arr[-max_per_symbol:]
 
             cleaned_list: List[Dict[str, Any]] = []
@@ -145,9 +189,9 @@ class PromptBuilder:
         return grouped
 
     # ---------------------------
-    # 單一時間框架 → JSON 區塊
+    # 單一時間框架 → JSON 區塊（價格類欄位依 symbol 精度）
     # ---------------------------
-    def _build_interval_block(self, interval: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _build_interval_block(self, interval: str, data: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
         """
         將單一 timeframe 的資料整理成 JSON block：
         {
@@ -155,7 +199,7 @@ class PromptBuilder:
           "boll_upper": ...,
           "boll_middle": ...,
           "boll_lower": ...,
-          "funding": 0.0001,              #（若要每個框架都帶，可用整體 funding 複製）
+          "funding": 0.0001,
           "rsi": [ ... 10 values, old->new ],
           "macd": [ ... 10 values, old->new ],
           "histogram": [ ... 10 values, old->new ],
@@ -173,16 +217,17 @@ class PromptBuilder:
         ind = data.get("indicators", {}) or {}
         df = data.get("dataframe")
 
+        # 價格類指標：動態價格精度
         block: Dict[str, Any] = {
             "time_frame": interval,
-            "boll_upper": self._get(ind, "bollinger_upper", 0.0, 2),
-            "boll_middle": self._get(ind, "bollinger_middle", 0.0, 2),
-            "boll_lower": self._get(ind, "bollinger_lower", 0.0, 2),
-            "ema20": self._get(ind, "ema_20", 0.0, 4),
-            "ema50": self._get(ind, "ema_50", 0.0, 4),
-            "sma20": self._get(ind, "sma_20", 0.0, 4),
-            "sma50": self._get(ind, "sma_50", 0.0, 4),
-            "atr14": self._get(ind, "atr_14", 0.0, 4),
+            "boll_upper": self._round_price(symbol, ind.get("bollinger_upper", 0.0)),
+            "boll_middle": self._round_price(symbol, ind.get("bollinger_middle", 0.0)),
+            "boll_lower": self._round_price(symbol, ind.get("bollinger_lower", 0.0)),
+            "ema20": self._round_price(symbol, ind.get("ema_20", 0.0)),
+            "ema50": self._round_price(symbol, ind.get("ema_50", 0.0)),
+            "sma20": self._round_price(symbol, ind.get("sma_20", 0.0)),
+            "sma50": self._round_price(symbol, ind.get("sma_50", 0.0)),
+            "atr14": self._round_price(symbol, ind.get("atr_14", 0.0)),  # ATR 為價格距離，也用價格精度
         }
 
         # ===== RSI / MACD arrays（舊→新）=====
@@ -190,7 +235,7 @@ class PromptBuilder:
         if df is not None and len(df) >= 30 and "close" in df:
             closes = df["close"]
 
-            # RSI
+            # RSI（1 位小數）
             try:
                 delta = closes.diff()
                 gain = delta.where(delta > 0, 0).rolling(window=14).mean()
@@ -201,7 +246,7 @@ class PromptBuilder:
             except Exception:
                 pass
 
-            # MACD
+            # MACD 與 Hist（4 位小數）
             try:
                 ema_fast = closes.ewm(span=12, adjust=False).mean()
                 ema_slow = closes.ewm(span=26, adjust=False).mean()
@@ -217,16 +262,16 @@ class PromptBuilder:
         block["macd"] = macd_arr
         block["histogram"] = hist_arr
 
-        # ===== OHLC（最近10根，舊→新）=====
+        # ===== OHLC（最近10根，舊→新；價格用動態價格精度）=====
         ohlc_list: List[Dict[str, float]] = []
         if df is not None and len(df) > 0:
             tail = df.tail(10)
             for _, row in tail.iterrows():
-                o = self._round(row.get("open", 0), 2)
-                h = self._round(row.get("high", 0), 2)
-                l = self._round(row.get("low", 0), 2)
-                c = self._round(row.get("close", 0), 2)
-                v = self._round(row.get("volume", 0), 0)
+                o = self._round_price(symbol, row.get("open", 0))
+                h = self._round_price(symbol, row.get("high", 0))
+                l = self._round_price(symbol, row.get("low", 0))
+                c = self._round_price(symbol, row.get("close", 0))
+                v = self._round(row.get("volume", 0), 0)  # 量仍用 0 位
                 ohlc_list.append({"O": o, "H": h, "L": l, "C": c, "V": v})
         block["ohlc"] = ohlc_list
 
@@ -287,7 +332,7 @@ class PromptBuilder:
                 },
             }
 
-        # 將歷史決策按幣種分組（新→舊）
+        # 將歷史決策按幣種分組（舊→新）
         grouped_hist = self._group_history_by_symbol(decision_history, max_per_symbol=10)
 
         # 遍歷幣種
@@ -297,8 +342,8 @@ class PromptBuilder:
             coin_name = symbol.replace("USDT", "")
             realtime = (market_data.get("realtime") or {})
 
-            # 頂層行情
-            current_price = self._get(realtime, "price", 0.0, 2)
+            # 頂層行情（價格用動態價格精度）
+            current_price = self._round_price(symbol, realtime.get("price", 0.0))
             funding_rate = self._get(realtime, "funding_rate", 0.0, 6)
             open_interest = self._get(realtime, "open_interest", 0.0, 0)
 
@@ -309,20 +354,20 @@ class PromptBuilder:
                 "current_price": current_price,
                 "position": None,
                 "market_data": [],
-                # 這裡掛上該幣種的歷史決策（新→舊）
+                # 這裡掛上該幣種的歷史決策（舊→新）
                 "decision_history": grouped_hist.get(symbol, []),
             }
 
-            # 持倉（若有）
+            # 持倉（若有）— 數量用 qty 精度，價格用 price 精度
             if position:
                 symbol_obj["position"] = {
                     "side": position.get("side") or ("LONG" if self._to_float(position.get("positionAmt"), 0.0) > 0 else "SHORT"),
-                    "positionAmt": self._to_float(position.get("positionAmt"), 0.0),
-                    "entry_price": self._get(position, "entry_price", 0.0, 3),
+                    "positionAmt": self._round_qty(symbol, position.get("positionAmt", 0.0)),
+                    "entry_price": self._round_price(symbol, position.get("entry_price", 0.0)),
                     "leverage": self._to_float(position.get("leverage"), 0.0),
-                    "unrealized_pnl": self._get(position, "unrealized_pnl", 0.0, 3),
-                    "pnl_percent": self._get(position, "pnl_percent", 0.0, 3),
-                    "isolatedMargin": self._get(position, "isolatedMargin", 0.0, 3),
+                    "unrealized_pnl": self._get(position, "unrealized_pnl", 0.0, 4),
+                    "pnl_percent": self._get(position, "pnl_percent", 0.0, 4),
+                    "isolatedMargin": self._get(position, "isolatedMargin", 0.0, 4),
                     "updateTime": position.get("updateTime") or 0,
                 }
 
@@ -331,7 +376,7 @@ class PromptBuilder:
             for interval in self.default_intervals:
                 if interval not in multi:
                     continue
-                block = self._build_interval_block(interval, multi.get(interval) or {})
+                block = self._build_interval_block(interval, multi.get(interval) or {}, symbol)
                 if block:
                     # 若希望每個 timeframe 也帶 funding，可複製 symbol 層的 funding（可選）
                     block["funding"] = funding_rate
