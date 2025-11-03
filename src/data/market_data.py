@@ -79,7 +79,7 @@ class MarketDataManager:
         return out
 
     # ---------- multi timeframe (use wrapper.get_klines) ----------
-    def get_multi_timeframe_data(self, symbol: str, intervals, limit: int = 100) -> dict:
+    def get_multi_timeframe_data(self, symbol: str, intervals, limit: int = 200) -> dict:
         symbol = symbol.upper()
         data = {}
         for iv in intervals:

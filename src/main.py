@@ -94,7 +94,7 @@ class TradingBot:
     def get_market_data_for_symbol(self, symbol: str) -> Dict[str, Any]:
         """获取单个币种的市场数据"""
         # 多周期K线
-        intervals = ['5m', '15m', '1h', '4h']
+        intervals = ['5m', '1h' , '4h']
         multi_timeframe = self.market_data.get_multi_timeframe_data(symbol, intervals)
         
         # 实时行情
@@ -120,15 +120,10 @@ class TradingBot:
             account_summary = self.account_data.get_account_summary()
             
             # 获取历史决策
-            history = self.decision_history[-3:] if self.decision_history else []
-            
+            history = self.decision_history[-20:] if self.decision_history else []
             # 构建多币种提示词
-            prompt = self.prompt_builder.build_multi_symbol_analysis_prompt(
-                all_symbols_data=all_symbols_data,
-                all_positions=all_positions,
-                account_summary=account_summary,
-                history=history
-            )
+            prompt = self.prompt_builder.build_multi_symbol_analysis_prompt_json(all_symbols_data, all_positions, account_summary , history)
+
             
             # 调用AI
             print(f"\n🤖 调用AI一次性分析所有币种...")
@@ -449,6 +444,7 @@ class TradingBot:
             for symbol, decision in all_decisions.items():
                 print(f"\n--- {symbol} ---")
                 market_data = all_symbols_data[symbol]['market_data']
+                self.save_decision(symbol, decision, market_data)
                 self.execute_decision(symbol, decision, market_data)
                 
         else:

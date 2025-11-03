@@ -1,6 +1,6 @@
 {
   "trading": {
-    "symbols": ["BTCUSDT" , "ETHUSDT"],
+    "symbols": ["BTCUSDT" , "ETHUSDT" , "SOLUSDT" , "TAOUSDT" , "DOGEUSDT" , "XRPUSDT"],
     "default_leverage": 5,
     "max_leverage": 20,
     "min_position_percent": 10,
