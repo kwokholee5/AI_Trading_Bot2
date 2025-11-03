@@ -43,11 +43,13 @@ class AccountDataManager:
                 equity = float(acct.get("totalWalletBalance") or 0.0)
                 unreal = float(acct.get("totalUnrealizedProfit") or 0.0)
                 maint  = float(acct.get("totalMaintMargin") or 0.0)
+                availableBalance = float(acct.get("availableBalance") or 0.0)
                 margin_ratio = (maint / equity * 100.0) if equity > 0 else 0.0
                 return {
                     "equity": equity,
                     "total_unrealized_pnl": unreal,
                     "margin_ratio": margin_ratio,
+                    "available_balance" : availableBalance
                 }
         except Exception:
             pass
@@ -58,11 +60,13 @@ class AccountDataManager:
             equity = float(acct.get("totalWalletBalance") or acct.get("totalMarginBalance") or 0.0)
             unreal = float(acct.get("totalUnrealizedProfit") or 0.0)
             maint  = float(acct.get("totalMaintMargin") or 0.0)
+            availableBalance = float(acct.get("availableBalance") or 0.0)
             margin_ratio = (maint / equity * 100.0) if equity > 0 else 0.0
             return {
                 "equity": equity,
                 "total_unrealized_pnl": unreal,
                 "margin_ratio": margin_ratio,
+                "available_balance" : availableBalance
             }
         except Exception:
             pass

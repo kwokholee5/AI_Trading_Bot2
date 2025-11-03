@@ -1,11 +1,10 @@
 # src/utils/symbol_filters.py
 from __future__ import annotations
-from typing import Dict, Any, Optional
-import math
+from typing import Dict, Any
+from decimal import Decimal, ROUND_DOWN
 
 class SymbolFilters:
     def __init__(self, info: Dict[str, Any]):
-        # info is what you get from client.futures_symbol_info(symbol)
         self.info = info or {}
         self.filters = {f["filterType"]: f for f in self.info.get("filters", [])}
 
@@ -13,38 +12,51 @@ class SymbolFilters:
         pricef = self.filters.get("PRICE_FILTER") or {}
         notional = self.filters.get("MIN_NOTIONAL") or {}
 
-        self.stepSize = float(lot.get("stepSize", "0.001"))       # ETHUSDT usually 0.001
-        self.minQty   = float(lot.get("minQty", "0.001"))
-        self.maxQty   = float(lot.get("maxQty", "100000000"))
+        # Keep as strings → convert to Decimal later (no float artifacts)
+        self.stepSize = lot.get("stepSize", "0.001")
+        self.minQty   = lot.get("minQty", "0.001")
+        self.maxQty   = lot.get("maxQty", "100000000")
 
-        self.tickSize = float(pricef.get("tickSize", "0.01"))      # ETHUSDT usually 0.01
-        self.minPrice = float(pricef.get("minPrice", "0.01"))
-        self.maxPrice = float(pricef.get("maxPrice", "100000000"))
+        self.tickSize = pricef.get("tickSize", "0.01")
+        self.minPrice = pricef.get("minPrice", "0.01")
+        self.maxPrice = pricef.get("maxPrice", "100000000")
 
-        # On Futures, MIN_NOTIONAL may exist (not always).
-        self.minNotional = float(notional.get("notional", "0"))
+        # On USDT Futures it’s often "notional"; on some it’s "minNotional"
+        self.minNotional = notional.get("notional") or notional.get("minNotional") or "0"
 
-    def _floor_to_step(self, value: float, step: float) -> float:
-        if step <= 0:
-            return value
-        return math.floor(value / step) * step
+        # Prebuild Decimals
+        self._step  = Decimal(self.stepSize)
+        self._minQ  = Decimal(self.minQty)
+        self._maxQ  = Decimal(self.maxQty)
+        self._tick  = Decimal(self.tickSize)
+        self._minP  = Decimal(self.minPrice)
+        self._maxP  = Decimal(self.maxPrice)
+        self._minN  = Decimal(self.minNotional)
 
-    def quantize_qty(self, qty: float) -> float:
-        q = max(self.minQty, min(qty, self.maxQty))
-        q = self._floor_to_step(q, self.stepSize)
-        # guard: flooring could go below minQty if qty < minQty
-        if q < self.minQty:
-            q = self.minQty
-        return float(f"{q:.18f}".rstrip("0").rstrip("."))
+    def _floor_to_step(self, value: Decimal, step: Decimal) -> Decimal:
+        # emulate floor(value/step)*step in Decimal space
+        return (value // step) * step
 
-    def quantize_price(self, price: float) -> float:
-        p = max(self.minPrice, min(price, self.maxPrice))
-        p = self._floor_to_step(p, self.tickSize)
-        if p < self.minPrice:
-            p = self.minPrice
-        return float(f"{p:.18f}".rstrip("0").rstrip("."))
+    def quantize_qty(self, qty: float | str) -> str:
+        q = Decimal(str(qty))
+        q = max(self._minQ, min(q, self._maxQ))
+        q = self._floor_to_step(q, self._step)
+        if q < self._minQ:
+            q = self._minQ
+        # Normalize to plain string (no scientific notation)
+        return format(q.normalize(), 'f')
 
-    def meets_notional(self, qty: float, price: float) -> bool:
-        if self.minNotional <= 0:
+    def quantize_price(self, price: float | str) -> str:
+        p = Decimal(str(price))
+        p = max(self._minP, min(p, self._maxP))
+        p = self._floor_to_step(p, self._tick)
+        if p < self._minP:
+            p = self._minP
+        return format(p.normalize(), 'f')
+
+    def meets_notional(self, qty: float | str, price: float | str) -> bool:
+        if self._minN <= 0:
             return True
-        return (qty * price) >= self.minNotional
+        q = Decimal(str(qty))
+        p = Decimal(str(price))
+        return (q * p) >= self._minN

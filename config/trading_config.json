@@ -1,6 +1,6 @@
 {
   "trading": {
-    "symbols": ["BTCUSDT", "ETHUSDT" , "SOLUSDT" , "BNBUSDT"],
+    "symbols": ["ETHUSDT","BTCUSDT"],
     "default_leverage": 5,
     "max_leverage": 20,
     "min_position_percent": 10,
@@ -10,8 +10,8 @@
   "risk": {
     "max_daily_loss_percent": 40,
     "max_consecutive_losses": 5,
-    "stop_loss_default_percent": 2,
-    "take_profit_default_percent": 5
+    "stop_loss_default_percent": 10,
+    "take_profit_default_percent": 10
   },
   "ai": {
     "model": "deepseek-reasoner",

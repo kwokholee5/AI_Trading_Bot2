@@ -66,8 +66,8 @@ class PromptBuilder:
 ### 风险控制
 - 最大每日亏损: {self.config['risk'].get('max_daily_loss_percent', 10)}%
 - 最大连续亏损: {self.config['risk'].get('max_consecutive_losses', 5)}次
-- 建议止损: -{self.config['risk'].get('stop_loss_default_percent', 2) * 100}%
-- 建议止盈: +{self.config['risk'].get('take_profit_default_percent', 5) * 100}%
+- 建议止损: -{self.config['risk'].get('stop_loss_default_percent', 2) * 1}%
+- 建议止盈: +{self.config['risk'].get('take_profit_default_percent', 5) * 1}%
 
 ## 市场数据
 
@@ -217,7 +217,7 @@ class PromptBuilder:
 ## 交易账户
 - 账户类型: Binance U本位永续合约
 - 支持双向交易: 可以做多(买入)或做空(卖出)
-- 杠杆范围: 1-100倍（建议3-10倍）
+- 杠杆范围: 1-100倍（建议3-20倍）
 
 ### 仓位管理
 - 最小仓位: {self.config['trading'].get('min_position_percent', 10)}%
@@ -225,8 +225,8 @@ class PromptBuilder:
 - 每个币种独立决策，不受其他币种影响
 
 ### 风险控制
-- 最大止损: -{self.config['risk'].get('stop_loss_default_percent', 2) * 100}%
-- 建议止盈: +{self.config['risk'].get('take_profit_default_percent', 5) * 100}%
+- 預設止损: -{self.config['risk'].get('stop_loss_default_percent', 2) }%
+- 預設止盈: +{self.config['risk'].get('take_profit_default_percent', 5) }%
 
 ## 市场数据
 
@@ -244,17 +244,17 @@ class PromptBuilder:
 
 请综合分析市场数据，为每个币种给出独立决策。
 
-请严格按照以下JSON格式回复（不要有任何额外文本）：
+请严格按照以下JSON格式回复（不要有任何额外文本） 另外,以下币种仅为举例, 回复的币种请参照所给的市场数据： 
 {{
-    "BTCUSDT": {{"action": "BUY_OPEN", "reason": "多周期上升趋势，RSI44未超买，4hMACD转正", "confidence": "HIGH", "leverage": 8, "position_percent": 20, "take_profit_percent": 5.0, "stop_loss_percent": -2.0}},
-    "ETHUSDT": {{"action": "SELL_OPEN", "reason": "4h RSI超买80，MACD转负，顶部信号", "confidence": "MEDIUM", "leverage": 5, "position_percent": 15, "take_profit_percent": 3.0, "stop_loss_percent": -1.5}},
-    "SOLUSDT": {{"action": "HOLD", "reason": "震荡整理，等待方向突破", "confidence": "LOW", "leverage": 0, "position_percent": 0, "take_profit_percent": 0, "stop_loss_percent": 0}}
+    "BTCUSDT": {{"action": "BUY_OPEN", "reason": "多周期上升趋势，RSI44未超买，4hMACD转正", "confidence": 1, "leverage": 8, "position_percent": 20, "take_profit_percent": 5.0, "stop_loss_percent": -2.0}},
+    "ETHUSDT": {{"action": "SELL_OPEN", "reason": "4h RSI超买80，MACD转负，顶部信号", "confidence": 0.5, "leverage": 5, "position_percent": 15, "take_profit_percent": 3.0, "stop_loss_percent": -1.5}},
+    "SOLUSDT": {{"action": "HOLD", "reason": "震荡整理，等待方向突破", "confidence": 1, "leverage": 0, "position_percent": 0, "take_profit_percent": 0, "stop_loss_percent": 0}}
 }}
 
 ### 字段说明
 - action: BUY_OPEN(开多) | SELL_OPEN(开空) | CLOSE(平仓) | HOLD(观望)
 - reason: 1-2句话说明决策理由，包含关键指标和值
-- confidence: HIGH / MEDIUM / LOW
+- confidence: 0.0 - 1.0
 - leverage: 杠杆倍数 1-100
 - position_percent: 仓位百分比 0-30
 - take_profit_percent: 止盈百分比（如5.0表示止盈5%）
@@ -262,7 +262,9 @@ class PromptBuilder:
 
 注意：
 1. 根据市场趋势灵活选择BUY_OPEN（做多）或SELL_OPEN（做空），不要只做单向交易
-2. 如果action是BUY_OPEN或SELL_OPEN，必须给出合理的止盈止损百分比
+2. 必须给出止盈止损百分比,尤其在使用高倍数槓杆情况下
+3. 如果判断趋势走向会造成现有持仓大幅亏损,可发送CLOSE
+4. 如果判断可止盈,可发送CLOSE
 """
         return prompt.strip()
     
@@ -273,7 +275,6 @@ class PromptBuilder:
         for symbol, symbol_data in all_symbols_data.items():
             market_data = symbol_data.get('market_data', {})
             position = symbol_data.get('position')
-            
             coin_name = symbol.replace('USDT', '')
             
             # 实时行情（确保不是None）
@@ -294,8 +295,7 @@ class PromptBuilder:
             
             result += f"""
 === {coin_name}/USDT ===
-价格: ${price:,.2f} | 24h: {change_24h:+.2f}% | 15m: {change_15m:+.2f}%
-资金费率: {funding_rate:.6f} ({funding_text}) | 持仓量: {open_interest:,.0f}
+价格: ${price:,.2f} 
 """
             
             # 持仓信息
@@ -303,10 +303,12 @@ class PromptBuilder:
                 pos = position
                 pnl_percent = pos.get('pnl_percent') or 0
                 side = pos.get('side', 'N/A')
-                amount = pos.get('amount') or 0
+                amount = pos.get('positionAmt') or 0
                 entry_price = pos.get('entry_price') or 0
                 unrealized_pnl = pos.get('unrealized_pnl') or 0
-                result += f"持仓: {side} {amount:.3f} @ ${entry_price:.2f} | 盈亏: {unrealized_pnl:+.2f} USDT ({pnl_percent:+.2f}%)\n"
+                isolatedMargin = pos.get('isolatedMargin') or 0
+                leverage = pos.get('leverage') or 0
+                result += f"持仓: {side} {amount:.3f} @ ${entry_price:.3f} | 保證金: {isolatedMargin:+.3f}  槓桿: {leverage}x | 盈亏: {unrealized_pnl:+.3f} USDT ({pnl_percent:+.3f}%)\n"
             else:
                 result += "持仓: 无仓位\n"
             
@@ -337,12 +339,39 @@ class PromptBuilder:
                     bb_lower = ind.get('bollinger_lower') or 0
                     
                     result += f"RSI: {rsi:.1f} | MACD: {macd:.4f}\n"
-                    result += f"BOLL上轨: {bb_upper:.2f} | BOLL中轨: {bb_middle:.2f} | BOLL下轨: {bb_lower:.2f}"
-                
+                    result += f"BOLL上轨: {bb_upper:.2f} | BOLL中轨: {bb_middle:.2f} | BOLL下轨: {bb_lower:.2f}\n"
+                    
+                rsi_arr, macd_arr, hist_arr = [], [], []
                 df = data.get('dataframe')
-                if df is not None and len(df) >= 18:
-                    result += "\n最近18根K线（OHLC）:\n"
-                    for idx, (i, row) in enumerate(df.tail(18).iterrows()):
+                if df is not None and len(df) >= 30:
+                    closes = df["close"]
+                    try:
+                        # recompute RSI for entire interval
+                        delta = closes.diff()
+                        gain = delta.where(delta > 0, 0).rolling(window=14).mean()
+                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                        rs = gain / loss
+                        rsi_full = 100 - (100 / (1 + rs))
+                        rsi_arr = [round(x, 1) for x in rsi_full.tail(10).tolist()]
+                    except Exception:
+                        pass
+
+                    try:
+                        ema_fast = closes.ewm(span=12, adjust=False).mean()
+                        ema_slow = closes.ewm(span=26, adjust=False).mean()
+                        macd_line = ema_fast - ema_slow
+                        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+                        hist = macd_line - signal_line
+                        macd_arr = [round(x, 4) for x in macd_line.tail(10).tolist()]
+                        hist_arr = [round(x, 4) for x in hist.tail(10).tolist()]
+                    except Exception:
+                        pass
+                    
+                    result += f"最近RSI序列(舊->新): {rsi_arr}\n"
+                    result += f"最近MACD序列(舊->新): {macd_arr}\n"
+                    result += f"MACD柱状图: {hist_arr}\n"
+                    result += "\n最近10根K线（OHLC）:\n"
+                    for idx, (i, row) in enumerate(df.tail(10).iterrows()):
                         open_price = row.get('open', 0) or 0
                         high = row.get('high', 0) or 0
                         low = row.get('low', 0) or 0
@@ -357,7 +386,7 @@ class PromptBuilder:
                         lower_shadow = min(open_price, close) - low
                         
                         result += f"  K{idx+1}: O=${open_price:.2f} H=${high:.2f} L=${low:.2f} C=${close:.2f} {body} ({change:+.2f}%) V={volume:.0f}\n"
-        
+
         return result
     
     def _format_account_summary(self, account_summary: Dict[str, Any]) -> str:

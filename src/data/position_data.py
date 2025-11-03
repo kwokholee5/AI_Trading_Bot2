@@ -13,11 +13,13 @@ from typing import Any, Dict, List, Optional
 class Position:
     symbol: str               # e.g., "BTCUSDT"
     side: str                 # "LONG" | "SHORT"
-    qty: float                # absolute position size (>0)
+    positionAmt: float                # absolute position size (>0)
+    isolatedMargin: float
     entry_price: float
     mark_price: float
     leverage: float
     unrealized_pnl: float
+    pnl_percent: float
     liq_price: Optional[float]
     isolated: bool
     opened_at: float          # epoch seconds
@@ -66,20 +68,9 @@ class PositionDataManager:
                 pos = self.wrapper.get_position(symbol)  # None or dict
                 if pos:
                     return self._normalize_pos_dict(symbol, pos)
-        except Exception:
-            pass
-
-        # 2) Fallback to raw python-binance
-        try:
-            if self.client and hasattr(self.client, "futures_position_information"):
-                rows = self.client.futures_position_information(symbol=symbol)
-                for r in rows or []:
-                    if float(r.get("positionAmt", 0)) != 0.0:
-                        return self._normalize_pos_dict(symbol, r)
-        except Exception:
-            pass
-
-        return None
+        except Exception as e:
+            print(e)
+            return None
 
     def _fetch_all_exchange_positions(self) -> List[Position]:
         # 1) wrapper first
@@ -90,21 +81,7 @@ class PositionDataManager:
                         for r in rows
                         if float(r.get("positionAmt", 0)) != 0.0]
         except Exception:
-            pass
-
-        # 2) raw client
-        try:
-            if self.client and hasattr(self.client, "futures_position_information"):
-                rows = self.client.futures_position_information()
-                out: List[Position] = []
-                for r in rows or []:
-                    if float(r.get("positionAmt", 0)) != 0.0:
-                        out.append(self._normalize_pos_dict(r.get("symbol", ""), r))
-                return out
-        except Exception:
-            pass
-
-        return []
+            return []
 
     # ----------------- normalization -----------------
 
@@ -116,8 +93,8 @@ class PositionDataManager:
         symbol = (symbol or d.get("symbol", "")).upper()
         amt = float(d.get("positionAmt", 0.0))
         side = "LONG" if amt > 0 else "SHORT"
-        qty = abs(amt)
-
+        positionAmt = abs(amt)
+        isolatedMargin = float(d.get("isolatedMargin", 0.0) or 0.0)
         entry = float(d.get("entryPrice", 0.0) or 0.0)
         mark = float(d.get("markPrice", d.get("markPriceAvg", 0.0)) or 0.0)
         lev = float(d.get("leverage", 0.0) or 0.0)
@@ -128,14 +105,17 @@ class PositionDataManager:
         isolated_flag = str(d.get("isolated", d.get("marginType", ""))).upper()
         isolated = (isolated_flag == "TRUE") or (isolated_flag == "ISOLATED")
 
+        pnl_percent = (upnl / isolatedMargin) * 100
         return Position(
             symbol=symbol,
             side=side,
-            qty=qty,
+            positionAmt=positionAmt,
+            isolatedMargin=isolatedMargin,
             entry_price=entry,
             mark_price=mark,
             leverage=lev,
             unrealized_pnl=upnl,
+            pnl_percent=pnl_percent,
             liq_price=liq_price,
             isolated=isolated,
             opened_at=time.time(),  # we don’t have exchange open time here
@@ -160,11 +140,13 @@ class PositionDataManager:
         return {
             "symbol": pos.symbol,
             "side": pos.side,
-            "qty": pos.qty,
+            "positionAmt": pos.positionAmt,
             "entry_price": pos.entry_price,
             "mark_price": pos.mark_price,
             "leverage": pos.leverage,
             "unrealized_pnl": pos.unrealized_pnl,
+            "pnl_percent" : pos.pnl_percent,
+            "isolatedMargin" : pos.isolatedMargin,
             "liq_price": pos.liq_price,
             "isolated": pos.isolated,
             "opened_at": pos.opened_at,
@@ -185,11 +167,13 @@ class PositionDataManager:
                 out.append({
                     "symbol": p.symbol,
                     "side": p.side,
-                    "qty": p.qty,
+                    "positionAmt": p.positionAmt,
                     "entry_price": p.entry_price,
                     "mark_price": p.mark_price,
                     "leverage": p.leverage,
                     "unrealized_pnl": p.unrealized_pnl,
+                    "pnl_percent" : p.pnl_percent,
+                    "isolatedMargin" : p.isolatedMargin,
                     "liq_price": p.liq_price,
                     "isolated": p.isolated,
                     "opened_at": p.opened_at,
@@ -212,14 +196,14 @@ class PositionDataManager:
                 return p
         return None
 
-    def upsert(self, symbol: str, side: str, qty: float, entry_price: float, meta: Optional[Dict[str, Any]] = None) -> Position:
+    def upsert(self, symbol: str, side: str, positionAmt: float, entry_price: float, meta: Optional[Dict[str, Any]] = None) -> Position:
         symbol = symbol.upper()
         existing = self.list_open()
         now = time.time()
         pos = Position(
             symbol=symbol,
             side=side.upper(),
-            qty=float(qty),
+            positionAmt=float(positionAmt),
             entry_price=float(entry_price),
             mark_price=float(meta.get("mark_price", entry_price) if meta else entry_price),
             leverage=float(meta.get("leverage", 0) if meta else 0),
@@ -240,10 +224,3 @@ class PositionDataManager:
         after = [asdict(p) for p in before if p.symbol.upper() != symbol]
         self._write(after)
         return len(after) != len(before)
-
-    # names used by the rest of the code (aliases)
-    def open_or_update_position(self, symbol: str, side: str, qty: float, entry_price: float, meta=None):
-        return self.upsert(symbol, side, qty, entry_price, meta or {})
-
-    def close_position(self, symbol: str) -> bool:
-        return self.close(symbol)

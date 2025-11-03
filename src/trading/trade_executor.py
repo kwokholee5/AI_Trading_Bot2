@@ -33,36 +33,39 @@ class TradeExecutor:
     def _ensure_qty_price(self, symbol: str, quantity: float, price: Optional[float] = None):
         """
         根据交易对过滤规则修正数量/价格，并确保满足最小名义金额。
-        返回 (adj_qty, adj_price, used_price)
+        返回 (adj_qty_str, adj_price_str, used_price_float)
         """
         filters = self._get_filters(symbol)
 
-        # 当前价格（用于名义金额检查）
-        used_price = None
+        # price used for notional checks
         if price is not None:
             used_price = float(price)
         else:
-            # 使用最新成交/标记价格
             t = self.client.get_ticker(symbol)
-            # 兼容 futures_ticker 字段
             p = t.get("lastPrice") or t.get("price") or t.get("markPrice")
             used_price = float(p)
 
-        adj_qty = filters.quantize_qty(float(quantity))
-        adj_price = None if price is None else filters.quantize_price(float(price))
+        # Quantize to **strings** for API
+        adj_qty_str = filters.quantize_qty(quantity)               # string
+        adj_price_str = None if price is None else filters.quantize_price(price)  # string or None
 
-        # 满足最小名义金额 (如有)
-        if not filters.meets_notional(adj_qty, used_price):
-            min_needed = filters.minNotional / max(used_price, 1e-12)
-            adj_qty = filters.quantize_qty(min_needed)
+        # For local checks, convert to float
+        adj_qty_num = float(adj_qty_str)
 
-        return adj_qty, adj_price, used_price
+        # Ensure min notional if present
+        # (filters.minNotional may be str if you followed the Decimal approach)
+        min_notional = float(getattr(filters, "minNotional", 0) or 0)
+        if min_notional > 0 and (adj_qty_num * used_price) < min_notional:
+            min_needed_qty = min_notional / max(used_price, 1e-12)
+            adj_qty_str = filters.quantize_qty(min_needed_qty)     # string
+            adj_qty_num = float(adj_qty_str)
+
+        return adj_qty_str, adj_price_str, used_price  # used_price stays float
 
     def _quantize_stop_prices(self, symbol: str, take_profit: Optional[float], stop_loss: Optional[float]):
-        """将止盈止损价格量化到tickSize"""
         filters = self._get_filters(symbol)
-        tp = None if take_profit is None else filters.quantize_price(float(take_profit))
-        sl = None if stop_loss is None else filters.quantize_price(float(stop_loss))
+        tp = None if take_profit is None else filters.quantize_price(take_profit)  # string
+        sl = None if stop_loss is None else filters.quantize_price(stop_loss)      # string
         return tp, sl
 
     # ==================== 开仓 ====================
@@ -86,7 +89,7 @@ class TradeExecutor:
         adj_qty, _, used_price = self._ensure_qty_price(symbol, quantity)
         if adj_qty <= 0:
             raise ValueError(f"{symbol} 数量无效（量化后<=0）")
-
+        
         # 开仓
         try:
             order = self.client.create_market_order(

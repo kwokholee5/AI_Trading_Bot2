@@ -238,7 +238,7 @@ class TradingBot:
                 confidence = 0.5
         
         # 如果信心度太低，不执行
-        if confidence < 0.5 and action != 'CLOSE':
+        if confidence < 0.3 and action != 'CLOSE':
             print(f"⚠️ {symbol} 信心度太低({confidence:.2f})，跳过执行")
             return
         
@@ -437,7 +437,6 @@ class TradingBot:
             for symbol in symbols:
                 market_data = self.get_market_data_for_symbol(symbol)
                 position = self.position_data.get_current_position(symbol)
-                
                 all_symbols_data[symbol] = {
                     'market_data': market_data,
                     'position': position
