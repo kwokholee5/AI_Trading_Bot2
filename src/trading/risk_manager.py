@@ -44,13 +44,13 @@ class RiskManager:
             return False, f"仓位过小（小于{min_percent*100}%）"
         
         # 检查最大仓位
-        if position_value > total_equity * max_percent:
-            return False, f"仓位过大（超过{max_percent*100}%）"
+        # if position_value > total_equity * max_percent:
+        #     return False, f"仓位过大（超过{max_percent*100}%）"
         
         # 检查预留资金
         used_margin = position_value  # 简化
-        if used_margin > total_equity * (1 - reserve_percent):
-            return False, f"违反预留资金要求（需保留{reserve_percent*100}%）"
+        # if used_margin > total_equity * (1 - reserve_percent):
+        #     return False, f"违反预留资金要求（需保留{reserve_percent*100}%）"
         
         return True, ""
     

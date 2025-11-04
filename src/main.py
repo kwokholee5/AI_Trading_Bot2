@@ -179,7 +179,7 @@ class TradingBot:
     def get_market_data_for_symbol(self, symbol: str) -> Dict[str, Any]:
         """获取单个币种的市场数据"""
         # 多周期K线
-        intervals = ['5m', '1h' , '4h']
+        intervals = ['3m', '1h' , '1d']
         multi_timeframe = self.market_data.get_multi_timeframe_data(symbol, intervals)
         
         # 实时行情
@@ -214,8 +214,8 @@ class TradingBot:
             print(f"\n🤖 调用AI一次性分析所有币种...")
             print(f"\n{'='*60}")
             print("📤 发送给AI的完整提示词:")
-            print(f"{'='*60}")
-            print(prompt)
+            # print(f"{'='*60}")
+            # print(prompt)
             print(f"{'='*60}\n")
             
             response = self.ai_client.analyze_and_decide(prompt)
@@ -340,11 +340,18 @@ class TradingBot:
             if action == 'BUY_OPEN':
                 # 开多仓
                 self._open_long(symbol, decision, total_equity, current_price)
-                
+            
+            elif action == 'ADD_BUY_OPEN':
+                self._open_long(symbol, decision, total_equity, current_price)
+
             elif action == 'SELL_OPEN':
                 # 开空仓
                 self._open_short(symbol, decision, total_equity, current_price)
-                
+            
+            elif action == 'ADD_SELL_OPEN':
+                # 开空仓
+                self._open_short(symbol, decision, total_equity, current_price)
+
             elif action == 'CLOSE':
                 # 平仓
                 self._close_position(symbol, decision)
@@ -365,14 +372,15 @@ class TradingBot:
             return
         
         # 检查是否已有持仓
-        position = self.position_data.get_current_position(symbol)
-        if position:
-            print(f"⚠️ {symbol} 已有持仓，无法开多仓")
-            return
+        # position = self.position_data.get_current_position(symbol)
+        # if position:
+        #     print(f"⚠️ {symbol} 已有持仓，无法开多仓")
+        #     return
         
         # 计算仓位数量
+        leverage = decision['leverage']
         position_percent = decision['position_percent'] / 100
-        position_value = total_equity * position_percent
+        position_value = leverage * total_equity * position_percent
         quantity = position_value / current_price
         
         # 检查数量是否有效
@@ -381,7 +389,6 @@ class TradingBot:
             return
         
         # 风险检查
-        leverage = decision['leverage']
         ok, errors = self.risk_manager.check_all_risk_limits(
             symbol, quantity, current_price, total_equity, total_equity
         )
@@ -420,14 +427,15 @@ class TradingBot:
             return
         
         # 检查是否已有持仓
-        position = self.position_data.get_current_position(symbol)
-        if position:
-            print(f"⚠️ {symbol} 已有持仓，无法开空仓")
-            return
+        # position = self.position_data.get_current_position(symbol)
+        # if position:
+        #     print(f"⚠️ {symbol} 已有持仓，无法开空仓")
+        #     return
         
         # 计算仓位数量
+        leverage = decision['leverage']
         position_percent = decision['position_percent'] / 100
-        position_value = total_equity * position_percent
+        position_value = leverage * total_equity * position_percent
         quantity = position_value / current_price
         
         # 检查数量是否有效
@@ -436,7 +444,6 @@ class TradingBot:
             return
         
         # 风险检查
-        leverage = decision['leverage']
         ok, errors = self.risk_manager.check_all_risk_limits(
             symbol, quantity, current_price, total_equity, total_equity
         )

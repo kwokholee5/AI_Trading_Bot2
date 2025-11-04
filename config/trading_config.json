@@ -15,8 +15,11 @@
   "risk": {
     "max_daily_loss_percent": 40,
     "max_consecutive_losses": 5,
-    "stop_loss_default_percent": 10,
-    "take_profit_default_percent": 10
+    "stop_loss_low": -2,
+    "stop_loss_high": -5,
+    "take_profit_low": 2,
+    "take_profit_high": 5,
+    "position_tolerance" : -80
   },
   "ai": {
     "model": "deepseek-reasoner",

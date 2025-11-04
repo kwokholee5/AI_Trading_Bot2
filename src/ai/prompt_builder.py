@@ -1,6 +1,6 @@
 """
-提示詞/JSON 構建器
-把市場數據轉為 JSON 載荷，並可生成給模型的中文提示詞（內嵌 JSON）
+提示词/JSON 构建器
+把市场数据转为 JSON 载荷，并可生成给模型的中文提示词（内嵌 JSON）
 """
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -8,8 +8,9 @@ import math
 import json
 from decimal import Decimal, InvalidOperation
 
+
 class PromptBuilder:
-    """提示詞構建器（支援 JSON 輸出）"""
+    """提示词构建器（支援 JSON 输出）"""
 
     @staticmethod
     def _decimals_from_step(step, default_dp: int = 2) -> int:
@@ -21,37 +22,29 @@ class PromptBuilder:
         if step is None:
             return default_dp
         try:
-            # Always go through str() to preserve precision (e.g. '1e-6')
-            d = Decimal(str(step))
+            d = Decimal(str(step))  # preserve precision
             if d <= 0:
                 return default_dp
-            # Decimal exponent is negative for decimals; -exponent == number of dp
-            # Example: 0.01 -> exponent -2 -> dp 2; 1E-6 -> exponent -6 -> dp 6
-            dp = max(0, -d.as_tuple().exponent)
-            # Optional safety clamp
-            if dp > 18:
-                dp = 18
-            return int(dp)
+            dp = max(0, -d.as_tuple().exponent)  # 0.01 -> 2; 1E-6 -> 6
+            return int(min(dp, 18))
         except (InvalidOperation, ValueError, TypeError):
             return default_dp
-        
-    def __init__(self, config: Dict[str, Any] , precision_map:Dict[str, Dict[str, int]]):
+
+    def __init__(self, config: Dict[str, Any], precision_map: Dict[str, Dict[str, int]]):
         """
-        初始化提示詞構建器
+        初始化提示词构建器
         Args:
             config: 交易配置
+            precision_map: 每个 symbol 的精度表 {"BTCUSDT": {"price_dp": 2, "qty_dp": 6}, ...}
         """
         self.config = config
         self.ai_config = config.get("ai", {})
-        # 預設的時間框架輸出順序（只輸出存在於資料中的）
-        self.default_intervals = ["5m", "15m", "1h", "4h", "1D"]
-
-        # === 新增：每個 symbol 的精度表 ===
-        # 結構：{"BTCUSDT": {"price_dp": 2, "qty_dp": 6}, ...}
+        # 预设的时间框架输出顺序（只输出存在于资料中的）
+        self.default_intervals = ["5m", "15m", "1h", "4h", "1d"]
         self.symbol_precisions = precision_map
 
     # ---------------------------
-    # 小工具：數值安全處理 / 取值 / 四捨五入
+    # 小工具：数值安全处理 / 取值 / 四捨五入
     # ---------------------------
     @staticmethod
     def _is_num(x) -> bool:
@@ -87,7 +80,7 @@ class PromptBuilder:
     @staticmethod
     def _norm_confidence(c) -> float:
         """
-        把字串 HIGH/MEDIUM/LOW 或數字轉成 0~1 浮點數
+        把字串 HIGH/MEDIUM/LOW 或数字转成 0~1 浮点数
         """
         if isinstance(c, (int, float)):
             try:
@@ -113,6 +106,42 @@ class PromptBuilder:
                 pass
         return 0.5
 
+    # ---------------------------
+    # K线形态检测
+    # ---------------------------
+    @staticmethod
+    def _detect_candlestick_patterns(ohlc_tail: List[Dict[str, float]]) -> List[str]:
+        patterns: List[str] = []
+        if len(ohlc_tail) == 0:
+            return patterns
+
+        def body(o, c): return abs(c - o)
+        def upper(o, h, c): return h - max(o, c)
+        def lower(o, l, c): return min(o, c) - l
+
+        last = ohlc_tail[-1]
+        o, h, l, c = last["O"], last["H"], last["L"], last["C"]
+        rng = max(1e-9, h - l)
+        b = body(o, c)
+        up = upper(o, h, c)
+        lo = lower(o, l, c)
+
+        if b <= rng * 0.1:
+            patterns.append("Doji")
+        if (lo >= rng * 0.5) and (up <= rng * 0.2) and (c > o):
+            patterns.append("Hammer")
+        if (up >= rng * 0.5) and (lo <= rng * 0.2) and (c < o):
+            patterns.append("ShootingStar")
+
+        if len(ohlc_tail) >= 2:
+            prev = ohlc_tail[-2]
+            o2, c2 = prev["O"], prev["C"]
+            if (c2 < o2) and (c > o) and (c >= max(o2, c2)) and (o <= min(o2, c2)):
+                patterns.append("BullishEngulfing")
+            if (c2 > o2) and (c < o) and (o >= max(o2, c2)) and (c <= min(o2, c2)):
+                patterns.append("BearishEngulfing")
+        return patterns
+    
     def _price_dp(self, symbol: str, fallback: int = 2) -> int:
         return int(self.symbol_precisions.get(symbol, {}).get("price_dp", fallback))
 
@@ -132,7 +161,7 @@ class PromptBuilder:
             return 0.0
 
     # ---------------------------
-    # 歷史決策分組：按幣種歸檔（舊→新）
+    # 历史决策分组：按币种归档（旧→新）
     # ---------------------------
     def _group_history_by_symbol(
         self,
@@ -140,15 +169,15 @@ class PromptBuilder:
         max_per_symbol: int = 10,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        將全域 decision_history 依 symbol 分組，輸出為「舊→新」。
-        若超過 max_per_symbol，保留最後 N 筆（最近 N 筆），
-        但輸出順序仍維持舊→新以與 RSI/MACD/OHLC 一致。
+        将全域 decision_history 依 symbol 分组，输出为「旧→新」。
+        若超过 max_per_symbol，保留最后 N 笔（最近 N 笔），
+        但输出顺序仍维持旧→新以与 RSI/MACD/OHLC 一致。
         """
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         if not decision_history:
             return grouped
 
-        # 先將全部紀錄按時間「舊→新」排序
+        # 先将全部纪录按时间「旧→新」排序
         def _ts_key(rec: Dict[str, Any]) -> float:
             ts = rec.get("timestamp")
             try:
@@ -156,9 +185,9 @@ class PromptBuilder:
             except Exception:
                 return 0.0
 
-        sorted_all = sorted(decision_history, key=_ts_key, reverse=False)  # 舊→新
+        sorted_all = sorted(decision_history, key=_ts_key, reverse=False)  # 旧→新
 
-        # 依幣種分桶
+        # 依币种分桶
         buckets: Dict[str, List[Dict[str, Any]]] = {}
         for rec in sorted_all:
             sym = rec.get("symbol")
@@ -167,7 +196,7 @@ class PromptBuilder:
             arr = buckets.setdefault(sym, [])
             arr.append(rec)
 
-        # 對每個幣種：只保留最後 N 筆（最近 N 筆），但輸出順序仍舊→新
+        # 对每个币种：只保留最后 N 笔（最近 N 笔），但输出顺序仍旧→新
         for sym, arr in buckets.items():
             trimmed = arr[-max_per_symbol:]
 
@@ -184,32 +213,108 @@ class PromptBuilder:
                 }
                 cleaned_list.append(cleaned)
 
-            grouped[sym] = cleaned_list  # 舊→新
+            grouped[sym] = cleaned_list  # 旧→新
 
         return grouped
 
     # ---------------------------
-    # 單一時間框架 → JSON 區塊（價格類欄位依 symbol 精度）
+    # 计算多组 KDJ（旧→新，近 10 组）
+    # ---------------------------
+    @staticmethod
+    def _compute_kdj_series(df, n: int = 9) -> List[Dict[str, float]]:
+        """
+        返回最近 10 组 KDJ（旧→新），格式：
+        [{"k": 45.3, "d": 42.8, "j": 50.4}, ...]
+        """
+        try:
+            if df is None or len(df) < n or not all(col in df for col in ("high", "low", "close")):
+                return []
+
+            low_n = df["low"].rolling(window=n, min_periods=n).min()
+            high_n = df["high"].rolling(window=n, min_periods=n).max()
+            rsv = (df["close"] - low_n) / (high_n - low_n) * 100.0
+            rsv = rsv.fillna(50.0).clip(lower=0.0, upper=100.0)
+
+            k_list, d_list, j_list = [], [], []
+            k_prev, d_prev = 50.0, 50.0
+            for val in rsv:
+                k_val = (2.0 / 3.0) * k_prev + (1.0 / 3.0) * float(val)
+                d_val = (2.0 / 3.0) * d_prev + (1.0 / 3.0) * k_val
+                j_val = 3.0 * k_val - 2.0 * d_val
+                k_list.append(k_val)
+                d_list.append(d_val)
+                j_list.append(j_val)
+                k_prev, d_prev = k_val, d_val
+
+            # 取最后 10 组（旧→新），四舍五入 1 位小数
+            tail_k = k_list[-10:]
+            tail_d = d_list[-10:]
+            tail_j = j_list[-10:]
+
+            result = [
+                {"k": round(k, 1), "d": round(d, 1), "j": round(j, 1)}
+                for k, d, j in zip(tail_k, tail_d, tail_j)
+            ]
+            return result
+        except Exception:
+            return []
+
+    # ---------------------------
+    # 计算多组 BOLL（旧→新，近 10 组）
+    # ---------------------------
+    def _compute_boll_series(self, df, symbol: str, window: int = 20) -> List[Dict[str, float]]:
+        """
+        返回最近 10 组布林带（旧→新），格式：
+        [{"upper": x, "middle": y, "lower": z}, ...]
+        所有价格栏位均用该 symbol 的动态价格精度进行四舍五入。
+        """
+        try:
+            if df is None or len(df) < window or "close" not in df:
+                return []
+
+            closes = df["close"]
+            sma = closes.rolling(window=window, min_periods=window).mean()
+            std = closes.rolling(window=window, min_periods=window).std()
+
+            upper = sma + (std * 2)
+            lower = sma - (std * 2)
+
+            tail_u = upper.tail(10).tolist()
+            tail_m = sma.tail(10).tolist()
+            tail_l = lower.tail(10).tolist()
+
+            out = []
+            for u, m, l in zip(tail_u, tail_m, tail_l):
+                out.append({
+                    "upper": self._round_price(symbol, u),
+                    "middle": self._round_price(symbol, m),
+                    "lower": self._round_price(symbol, l),
+                })
+            return out
+        except Exception:
+            return []
+
+    # ---------------------------
+    # 单一时间框架 → JSON 区块（价格类栏位依 symbol 精度）
     # ---------------------------
     def _build_interval_block(self, interval: str, data: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
         """
-        將單一 timeframe 的資料整理成 JSON block：
+        生成单一 timeframe 的 JSON 区块：
         {
           "time_frame": "5m",
-          "boll_upper": ...,
-          "boll_middle": ...,
-          "boll_lower": ...,
           "funding": 0.0001,
           "rsi": [ ... 10 values, old->new ],
           "macd": [ ... 10 values, old->new ],
           "histogram": [ ... 10 values, old->new ],
           "ema20":  ...,
-          "ema50":  ...,
-          "sma20":  ...,
-          "sma50":  ...,
           "atr14":  ...,
+          "kdj": [ {"k":..,"d":..,"j":..}, ... 10 ],
+          "boll": [ {"upper":..,"middle":..,"lower":..}, ... 10 ],
           "ohlc": [ {O,H,L,C,V}, ... 10 rows old->new ]
         }
+        说明：
+        - KDJ 与 BOLL 皆为「多组阵列」，取最近 10 组，顺序为旧→新。
+        - 价格类字段使用该 symbol 的动态价格精度。
         """
         if not data:
             return None
@@ -217,36 +322,30 @@ class PromptBuilder:
         ind = data.get("indicators", {}) or {}
         df = data.get("dataframe")
 
-        # 價格類指標：動態價格精度
+        # 价格类指标（单值）：动态价格精度
         block: Dict[str, Any] = {
             "time_frame": interval,
-            "boll_upper": self._round_price(symbol, ind.get("bollinger_upper", 0.0)),
-            "boll_middle": self._round_price(symbol, ind.get("bollinger_middle", 0.0)),
-            "boll_lower": self._round_price(symbol, ind.get("bollinger_lower", 0.0)),
             "ema20": self._round_price(symbol, ind.get("ema_20", 0.0)),
-            "ema50": self._round_price(symbol, ind.get("ema_50", 0.0)),
-            "sma20": self._round_price(symbol, ind.get("sma_20", 0.0)),
-            "sma50": self._round_price(symbol, ind.get("sma_50", 0.0)),
-            "atr14": self._round_price(symbol, ind.get("atr_14", 0.0)),  # ATR 為價格距離，也用價格精度
+            "atr14": self._round_price(symbol, ind.get("atr_14", 0.0)),  # ATR 为价格距离，也用价格精度
         }
 
-        # ===== RSI / MACD arrays（舊→新）=====
+        # ===== RSI / MACD arrays（旧→新）=====
         rsi_arr, macd_arr, hist_arr = [], [], []
         if df is not None and len(df) >= 30 and "close" in df:
             closes = df["close"]
 
-            # RSI（1 位小數）
+            # RSI（1 位小数）
             try:
                 delta = closes.diff()
-                gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                gain = delta.where(delta > 0, 0).rolling(window=14, min_periods=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=14).mean()
                 rs = gain / loss
                 rsi_full = 100 - (100 / (1 + rs))
                 rsi_arr = [self._round(x, 1) for x in rsi_full.tail(10).tolist()]
             except Exception:
                 pass
 
-            # MACD 與 Hist（4 位小數）
+            # MACD 与 Hist（4 位小数）
             try:
                 ema_fast = closes.ewm(span=12, adjust=False).mean()
                 ema_slow = closes.ewm(span=26, adjust=False).mean()
@@ -262,7 +361,15 @@ class PromptBuilder:
         block["macd"] = macd_arr
         block["histogram"] = hist_arr
 
-        # ===== OHLC（最近10根，舊→新；價格用動態價格精度）=====
+        # ===== KDJ 多组（旧→新）=====
+        kdj_list = self._compute_kdj_series(df, n=9)
+        block["kdj"] = kdj_list
+
+        # ===== BOLL 多组（旧→新）=====
+        boll_list = self._compute_boll_series(df, symbol, window=20)
+        block["boll"] = boll_list
+
+        # ===== OHLC（最近10根，旧→新；价格用动态价格精度）=====
         ohlc_list: List[Dict[str, float]] = []
         if df is not None and len(df) > 0:
             tail = df.tail(10)
@@ -273,12 +380,12 @@ class PromptBuilder:
                 c = self._round_price(symbol, row.get("close", 0))
                 v = self._round(row.get("volume", 0), 0)  # 量仍用 0 位
                 ohlc_list.append({"O": o, "H": h, "L": l, "C": c, "V": v})
-        block["ohlc"] = ohlc_list
-
+        # block["ohlc"] = ohlc_list
+        block["patterns"] = self._detect_candlestick_patterns(ohlc_list) if ohlc_list else []
         return block
 
     # ---------------------------
-    # 整體：多幣種 → JSON 載荷（dict）
+    # 整体：多币种 → JSON 载荷（dict）
     # ---------------------------
     def build_multi_symbol_analysis_payload(
         self,
@@ -288,8 +395,8 @@ class PromptBuilder:
         decision_history: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
-        產出**JSON 載荷**（Python dict 可直接 json.dumps）
-        結構：
+        产出**JSON 载荷**（Python dict 可直接 json.dumps）
+        结构：
         {
           "meta": {...},
           "account": {...},
@@ -301,7 +408,7 @@ class PromptBuilder:
               "current_price": ...,
               "position": {...} | null,
               "market_data": [ {...}, ... ],
-              "decision_history": [ {... 舊→新 ...} ]
+              "decision_history": [ {... 旧→新 ...} ]
             },
             ...
           ]
@@ -316,33 +423,25 @@ class PromptBuilder:
             "symbols": [],
         }
 
-        # 帳戶摘要
+        # 帐户摘要
         if account_summary:
             payload["account"] = {
                 "equity": self._get(account_summary, "equity", 0.0, 2),
                 "available_balance": self._get(account_summary, "available_balance", 0.0, 2),
                 "total_unrealized_pnl": self._get(account_summary, "total_unrealized_pnl", 0.0, 2),
-                "risk": {
-                    "default_stop_loss_percent": self._get(self.config.get("risk", {}), "stop_loss_default_percent", 2.0, 4),
-                    "default_take_profit_percent": self._get(self.config.get("risk", {}), "take_profit_default_percent", 5.0, 4),
-                },
-                "position_rules": {
-                    "min_position_percent": self._get(self.config.get("trading", {}), "min_position_percent", 10.0, 4),
-                    "max_position_percent": self._get(self.config.get("trading", {}), "max_position_percent", 30.0, 4),
-                },
             }
 
-        # 將歷史決策按幣種分組（舊→新）
+        # 历史决策按币种分组（旧→新）
         grouped_hist = self._group_history_by_symbol(decision_history, max_per_symbol=10)
 
-        # 遍歷幣種
+        # 遍历币种
         for symbol, symbol_data in all_symbols_data.items():
             market_data = symbol_data.get("market_data", {}) or {}
             position = symbol_data.get("position")
             coin_name = symbol.replace("USDT", "")
             realtime = (market_data.get("realtime") or {})
 
-            # 頂層行情（價格用動態價格精度）
+            # 顶层行情（价格用动态价格精度）
             current_price = self._round_price(symbol, realtime.get("price", 0.0))
             funding_rate = self._get(realtime, "funding_rate", 0.0, 6)
             open_interest = self._get(realtime, "open_interest", 0.0, 0)
@@ -354,11 +453,11 @@ class PromptBuilder:
                 "current_price": current_price,
                 "position": None,
                 "market_data": [],
-                # 這裡掛上該幣種的歷史決策（舊→新）
+                # 该币种的历史决策（旧→新）
                 "decision_history": grouped_hist.get(symbol, []),
             }
 
-            # 持倉（若有）— 數量用 qty 精度，價格用 price 精度
+            # 持仓（若有）— 数量用 qty 精度，价格用 price 精度
             if position:
                 symbol_obj["position"] = {
                     "side": position.get("side") or ("LONG" if self._to_float(position.get("positionAmt"), 0.0) > 0 else "SHORT"),
@@ -371,14 +470,14 @@ class PromptBuilder:
                     "updateTime": position.get("updateTime") or 0,
                 }
 
-            # 各時間框架
+            # 各时间框架
             multi = market_data.get("multi_timeframe", {}) or {}
             for interval in self.default_intervals:
                 if interval not in multi:
                     continue
                 block = self._build_interval_block(interval, multi.get(interval) or {}, symbol)
                 if block:
-                    # 若希望每個 timeframe 也帶 funding，可複製 symbol 層的 funding（可選）
+                    # 若希望每个 timeframe 也带 funding，可复制 symbol 层的 funding（可选）
                     block["funding"] = funding_rate
                     symbol_obj["market_data"].append(block)
 
@@ -387,7 +486,7 @@ class PromptBuilder:
         return payload
 
     # ---------------------------
-    # 文字提示：內嵌 JSON（給 DeepSeek）
+    # 文字提示：内嵌 JSON（给 DeepSeek）
     # ---------------------------
     def build_multi_symbol_analysis_prompt_json(
         self,
@@ -397,8 +496,8 @@ class PromptBuilder:
         decision_history: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
-        產生**中文提示詞** + 內嵌 **JSON 載荷**。
-        模型請以該 JSON 為依據，回傳每個幣種的決策 JSON。
+        产生**中文提示词** + 内嵌 **JSON 载荷**。
+        模型请以该 JSON 为依据，回传每个币种的决策 JSON。
         """
         payload = self.build_multi_symbol_analysis_payload(
             all_symbols_data, all_positions, account_summary, decision_history
@@ -406,119 +505,72 @@ class PromptBuilder:
         payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
         prompt = f"""
-你是一位專業的日內交易員。以下提供多幣種的結構化市場資料（JSON），
-請逐一分析每個幣種並輸出**決策 JSON**，格式如下（幣種鍵以實際輸入為準）：
+你是一位专业的日内交易员。以下提供多币种的结构化市场资料（JSON），
+请逐一分析每个币种并输出**决策 JSON**，格式如下（币种键以实际输入为准）：
 
 {{
   "BTCUSDT": {{
-    "action": "BUY_OPEN" | "SELL_OPEN" | "CLOSE" | "HOLD",
-    "reason": "1-2句話說明決策理由（含關鍵指標與數值）",
+    "action": "BUY_OPEN" | "SELL_OPEN" | "CLOSE" | "HOLD" | "ADD_BUY_OPEN" | "ADD_SELL_OPEN",
+    "reason": "1-2句话说明决策理由（含关键指标与数值）",
     "confidence": 0.0 - 1.0,
     "leverage":  {self.config.get('trading', {}).get('default_leverage', 10)}-{self.config.get('trading', {}).get('max_leverage', 10)},
-    "position_percent": 0-30,
-    "take_profit_percent": 5.0,
-    "stop_loss_percent": -2.0
+    "position_percent": 0-10,
+    "take_profit_percent":  {self.config.get('risk', {}).get('take_profit_low', 10)}-{self.config.get('risk', {}).get('take_profit_high', 10)},
+    "stop_loss_percent":  {self.config.get('risk', {}).get('stop_loss_low', 10)}-{self.config.get('risk', {}).get('stop_loss_high', 10)}
   }},
   "...": {{ ... }}
 }}
 
 說明：
-- 若判斷風險較高或趨勢不明確，可使用 HOLD。
-- BUY_OPEN/SELL_OPEN 時務必提供合理止盈止損百分比。
-- 可參考 market_data 內不同 time_frame 的 RSI/MACD/HIST 與 OHLC（皆為「舊→新」序列）。
-- 每個幣種下方含有該幣的 decision_history（舊→新），可用以對齊你的建議與既有持倉/歷史。
+──────────────────────────────
+📊 **輸入的 JSON 結構（重點欄位）**
+- `market` / `current_price` / `funding` / `open_interest`
+- `position`：當前持倉（若有） 
+- `market_data`：多時間框架（5m、15m、1h、4h、1D 等）
+  - `atr14`: 波動幅度
+  - `ema20`: ema20
+  - `rsi`: 最近 10 筆（rsi 舊→新）
+  - `macd`: 最近 10 筆 MACD 快線（舊→新）
+  - `histogram`: 最近 10 筆 MACD 柱狀圖（舊→新）
+  - `kdj`: 最近 10 筆 kdj
+  - `pattern`: 近幾根 K 線辨識形態（舊→新）
+  
+倉位说明：
+- 每个币种单独决策，依市场状况 BUY_OPEN(作多)/SELL_OPEN(作空)/ADD_BUY_OPEN(加倉作多)/ADD_SELL_OPEN(加倉作空)
+- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/position_percent/take_profit_percent/stop_loss_percent
+- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损百分比。 position_percent為 5-10
+- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损百分比,position_percent 為 1-5
+- 我會根據你回傳的position_percent,leverage來開倉
+  開倉所使用的保證金(isolatedMargin)為 equity*position_percent
+  若所有艙位的isolatedMargin合超過equity的70%, 則不可開倉或加倉
+- take_profit_percent/stop_loss_percent 會因為leverage而擴大
+  例如設定stop_loss_percent為-2%,在leverage=10的情況下,幣價下跌2%,實際損失20%
+- 單个币种(倉位)的最大忍受損失程度為{self.config.get('risk', {}).get('position_tolerance', 10)}% 若超過則無條件CLOSE
+- 不要只做多! 
 
-# 當前時間
+技術指標資料說明:
+- time_frame:1d 用來判斷大方向,空頭趨勢盡量做空,多頭趨勢盡量做多
+- time_frame:1h 用來判斷是否開倉,也可用來判斷是否獲利了結/停損
+- time_frame:3m 用來判斷短時間內是否有跟現有艙位反方向的大行情出現, 判斷是否需要緊急平倉
+- 可参考 market_data 内不同 time_frame 的 RSI/MACD/HIST/KDJ/BOLL 皆为「旧→新」序列）。
+- 每个币种下方含有该币的 decision_history（旧→新），可用以对齐你的建议与既有持仓/历史。
+- **decision_history（舊→新）**：請審視最近數筆紀錄，並遵循：
+  1) 避免「來回打臉」：若上次剛開倉，除非出現**反向強訊號**（如 MACD 零軸反轉 + KDJ 交叉 + RSI 位階改變），否則傾向持有或減倉，而非立即反手  
+  2) 若歷史連續錯向或 ATR 升高 ⇒ 優先**降槓桿/縮小倉位**  
+  3) 若同方向連勝且多週期一致 ⇒ 可**小幅加槓桿/加倉**（不得超過上限）  
+  4) **具體化理由**：在 reason 中說明「相對於最近一次操作的變化點」（例：「上次 BUY_OPEN 後，4h MACD 由正轉負且 KDJ 死亡交叉，決定 CLOSE」）
+- 若本次建議與歷史方向相反，請在 reason 中**明確列出反轉依據**（指標交叉、零軸穿越、布林結構改變、關鍵位失守/站回）
+
+# 当前时间
 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-# 帳戶配置（僅供參考）
-- 最小倉位: {self.config.get('trading', {}).get('min_position_percent', 10)}%
-- 最大倉位: {self.config.get('trading', {}).get('max_position_percent', 30)}%
-- 預設止損: -{self.config.get('risk', {}).get('stop_loss_default_percent', 2)}%
-- 預設止盈: +{self.config.get('risk', {}).get('take_profit_default_percent', 5)}%
-
-# 市場資料 JSON（請據此做判斷）
+# 市场资料 JSON（请据此做判断）
 {payload_json}
 """.strip()
 
         return prompt
 
-    # ---------------------------
-    # 保留原本的單幣 Prompt（若你還要用）
-    # ---------------------------
-    def build_analysis_prompt(
-        self,
-        symbol: str,
-        market_data: Dict[str, Any],
-        position: Optional[Dict[str, Any]] = None,
-        history: List[Dict[str, Any]] = None,
-    ) -> str:
-        """
-        舊版：單幣種的文字型提示（保留以防有用）
-        """
-        prompt = f"""
-# 加密貨幣期貨交易分析
-當前時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-## 帳戶資訊
-- 幣種: {symbol}
-- 槓桿範圍: 1-100倍（建議3-10倍）
-
-## 風險/倉位
-- 最小倉位: {self.config['trading'].get('min_position_percent', 10)}%
-- 最大倉位: {self.config['trading'].get('max_position_percent', 30)}%
-- 預設止損: -{self.config['risk'].get('stop_loss_default_percent', 2)}%
-- 預設止盈: +{self.config['risk'].get('take_profit_default_percent', 5)}%
-
-請分析下面市場資料並輸出決策 JSON（同多幣格式的一個子集）。
-"""
-        return prompt.strip()
-
-    # ---------------------------
-    # 舊的純文字渲染（若你需要仍可使用）
-    # ---------------------------
-    def _format_market_data(self, symbol: str, market_data: Dict[str, Any]) -> str:
-        """舊版：把單幣市場數據渲染成文字（保留）"""
-        realtime = market_data.get("realtime", {})
-        multi_data = market_data.get("multi_timeframe", {})
-        result = f"### {symbol} 即時行情\n"
-
-        price = realtime.get("price") or 0
-        change_24h = realtime.get("change_24h") or 0
-        change_15m = realtime.get("change_15m") or 0
-        funding_rate = realtime.get("funding_rate") or 0
-        open_interest = realtime.get("open_interest") or 0
-
-        result += f"- 當前價格: ${price:,.2f}\n"
-        result += f"- 24h漲跌: {change_24h:.2f}%\n"
-        result += f"- 15m漲跌: {change_15m:.2f}%\n"
-        result += f"- 資金費率: {funding_rate:.6f}\n"
-        result += f"- 持倉量: {open_interest:,.0f}\n"
-
-        for interval, data in multi_data.items():
-            if "indicators" not in data:
-                continue
-            ind = data["indicators"]
-            df = data.get("dataframe")
-            result += f"\n### {interval} 週期\n"
-            if df is not None and len(df) >= 3:
-                for _, row in df.tail(3).iterrows():
-                    close = row["close"]
-                    change = ((row["close"] - row["open"]) / row["open"]) * 100
-                    result += f"- K線: C${close:.2f} ({change:+.2f}%)\n"
-            rsi = ind.get("rsi") or 0
-            macd = ind.get("macd") or 0
-            macd_signal = ind.get("macd_signal") or 0
-            macd_hist = ind.get("macd_histogram") or 0
-            ema20 = ind.get("ema_20") or 0
-            ema50 = ind.get("ema_50") or 0
-            atr = ind.get("atr_14") or 0
-            result += f"- RSI(14): {rsi:.1f}\n"
-            result += f"- MACD: {macd:.2f}, Signal: {macd_signal:.2f}, Hist: {macd_hist:.2f}\n"
-            result += f"- EMA20: {ema20:.2f}, EMA50: {ema50:.2f}\n"
-            result += f"- ATR(14): {atr:.2f}\n"
-        return result
-
+    # （保留：仅在需要时使用）
     def _format_account_summary(self, account_summary: Dict[str, Any]) -> str:
         if not account_summary:
             return ""
@@ -526,7 +578,7 @@ class PromptBuilder:
         available = account_summary.get("available_balance", 0)
         unrealized_pnl = account_summary.get("total_unrealized_pnl", 0)
         return f"""
-帳戶餘額: {equity:.2f} USDT
-可用餘額: {available:.2f} USDT
-未實現損益: {unrealized_pnl:+.2f} USDT
+帐户馀额: {equity:.2f} USDT
+可用馀额: {available:.2f} USDT
+未实现损益: {unrealized_pnl:+.2f} USDT
 """.strip()
