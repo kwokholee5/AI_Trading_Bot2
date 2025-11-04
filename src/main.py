@@ -362,7 +362,7 @@ class TradingBot:
                 
             
             elif action == 'PARTIAL_CLOSE':
-                pct = decision.get('partial_close_percent')
+                pct = decision.get('reduce_percent')
                 try:
                     pct = float(pct)
                 except Exception:
@@ -514,7 +514,8 @@ class TradingBot:
             'action': decision['action'],
             'confidence': decision['confidence'],
             'leverage': decision['leverage'],
-            'open_percent': decision['open_percent'],
+            'open_percent': decision.get('open_percent', 0),
+            'reduce_percent': decision.get('reduce_percent', 0),
             'reason': decision['reason'],
             'price': market_data['realtime'].get('price', 0),
             'positionAfterExecution' : p_obj

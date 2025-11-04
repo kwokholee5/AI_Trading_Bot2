@@ -205,10 +205,13 @@ class PromptBuilder:
                 cleaned = {
                     "timestamp": rec.get("timestamp"),
                     "action": rec.get("action"),
+                    "open_percent" : rec.get("open_percent") or 0,
+                    "reduce_percent" : rec.get("reduce_percent") or 0,
                     "confidence": self._norm_confidence(rec.get("confidence")),
                     "leverage": self._to_float(rec.get("leverage"), 0.0),
                     "reason": rec.get("reason"),
                     "price": self._to_float(rec.get("price"), 0.0),
+                    "positionAfterExecution" : rec.get("positionAfterExecution"),
                 }
                 cleaned_list.append(cleaned)
 
@@ -512,7 +515,7 @@ class PromptBuilder:
     "confidence": 0.0 - 1.0,
     "leverage":  {self.config.get('trading', {}).get('default_leverage', 10)}-{self.config.get('trading', {}).get('max_leverage', 10)},
     "open_percent": 0-10,
-    "partial_close_percent" : 0-100,
+    "reduce_percent" : 0-100,
     "take_profit_percent":  {self.config.get('risk', {}).get('take_profit_low', 10)}-{self.config.get('risk', {}).get('take_profit_high', 10)},
     "stop_loss_percent":  {self.config.get('risk', {}).get('stop_loss_low', 10)}-{self.config.get('risk', {}).get('stop_loss_high', 10)}
   }},
@@ -533,20 +536,6 @@ class PromptBuilder:
   - `kdj`: 最近 10 筆 kdj
   - `pattern`: 近幾根 K 線辨識形態（舊→新）
   
-#倉位说明：
-- 每个币种单独决策，依市场状况 BUY_OPEN(作多)/SELL_OPEN(作空)/ADD_BUY_OPEN(加倉作多)/ADD_SELL_OPEN(加倉作空)
-- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/open_percent/take_profit_percent/stop_loss_percent
-- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损百分比。 
-- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损百分比,
-- PARTIAL_CLOSE 為減倉, 只用來確保利潤,不用來減少損失
-- 我會根據你回傳的open_percent,leverage來開倉
-  開倉所使用的保證金(isolatedMargin)為 equity*open_percent
-  若所有艙位的isolatedMargin合超過equity的70%, 則不可開倉或加倉
-- take_profit_percent/stop_loss_percent 會因為leverage而擴大
-  例如設定stop_loss_percent為-2%,在leverage=10的情況下,幣價下跌2%,實際損失20%
-- 單个币种(倉位)的最大忍受損失程度為{self.config.get('risk', {}).get('position_tolerance', 10)}% 若超過則無條件CLOSE
-- 不要只做多! 
-
 #技術指標資料說明:
 - time_frame:1d 用來判斷大方向,空頭趨勢盡量做空,多頭趨勢盡量做多
 - time_frame:1h,3m 用來判斷是否開倉,也可用來判斷是否獲利了結/停損
@@ -558,6 +547,25 @@ class PromptBuilder:
   3) 若同方向連勝且多週期一致 ⇒ 可**小幅加槓桿/加倉**（不得超過上限）  
   4) **具體化理由**：在 reason 中說明「相對於最近一次操作的變化點」（例：「上次 BUY_OPEN 後，4h MACD 由正轉負且 KDJ 死亡交叉，決定 CLOSE」）
 - 若本次建議與歷史方向相反，請在 reason 中**明確列出反轉依據**（指標交叉、零軸穿越、布林結構改變、關鍵位失守/站回）
+
+#倉位说明：
+- 每个币种单独决策，依市场状况 BUY_OPEN(作多)/SELL_OPEN(作空)/ADD_BUY_OPEN(加倉作多)/ADD_SELL_OPEN(加倉作空)
+- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/open_percent/take_profit_percent/stop_loss_percent
+- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损百分比。 
+- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损百分比,
+- PARTIAL_CLOSE 為減倉, 只用來確保利潤,不用來減少損失 , 需帶入reduce_percent
+- 我會根據你回傳的open_percent,leverage來開倉
+  開倉所使用的保證金(isolatedMargin)為 equity*open_percent
+  若所有艙位的isolatedMargin合超過equity的70%, 則不可開倉或加倉
+- 不要只做多! 
+- 若技術分析結果與市場情況相反,造成倉位浮虧的時候:
+  請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
+  得到的數字超過 {self.config.get('risk', {}).get('position_tolerance', 10)}% 再考慮停損
+  但若技術分析反轉(參照decision_history), 且信心足夠 , 可考慮停損
+- 在考慮減倉時:
+  請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
+  得到的數字超過 {self.config.get('risk', {}).get('reduce_if_over', 10)}% 再考慮鎖定利潤
+  或是根據decision_history上一次的艙位,獲利減少超過{self.config.get('risk', {}).get('reduce_if_fallback', 10)}%時,再考慮鎖定利潤
 
 #当前时间
 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}

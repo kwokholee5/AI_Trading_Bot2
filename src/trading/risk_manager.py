@@ -40,8 +40,8 @@ class RiskManager:
         position_value = quantity * price
         
         # 检查最小仓位
-        if position_value < total_equity * min_percent:
-            return False, f"仓位过小（小于{min_percent*100}%）"
+        # if position_value < total_equity * min_percent:
+        #     return False, f"仓位过小（小于{min_percent*100}%）"
         
         # 检查最大仓位
         # if position_value > total_equity * max_percent:
