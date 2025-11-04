@@ -414,18 +414,55 @@ class BinanceClient:
             return None
     
     def get_open_orders(self, symbol: str = None) -> list:
-        """获取所有挂单"""
+        """取得未成交掛單（僅 open orders）"""
         try:
             if symbol:
-                orders = self.client.futures_get_open_orders(symbol=symbol)
-            else:
-                orders = self.client.futures_get_all_orders()
-            return orders
+                return self.client.futures_get_open_orders(symbol=symbol)
+            # 若沒指定 symbol，拿所有 open orders（注意：不是 all orders）
+            return self.client.futures_get_open_orders()
         except BinanceAPIException as e:
-            print(f"⚠️ 获取挂单失败: {e}")
+            print(f"⚠️ 獲取開單失敗: {e}")
             return []
     
     # ==================== 工具方法 ====================
+    
+    def list_close_orders(self, symbol: str) -> list:
+        """
+        回傳「會關倉」的條件單（TP/SL/STOP/TAKE_PROFIT）：
+        - type in {STOP, STOP_MARKET, TAKE_PROFIT, TAKE_PROFIT_MARKET}
+        - 並且 (closePosition=True) 或 (reduceOnly=True)
+        """
+        try:
+            opens = self.client.futures_get_open_orders(symbol=symbol)
+        except BinanceAPIException as e:
+            print(f"⚠️ 讀取開倉單失敗 {symbol}: {e}")
+            return []
+
+        def is_close(o: dict) -> bool:
+            t = (o.get("type") or "").upper()
+            if t not in {"STOP", "STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET"}:
+                return False
+            # 期貨欄位：有些在回傳裡叫 reduceOnly、有些叫 closePosition
+            return bool(o.get("closePosition")) or bool(o.get("reduceOnly"))
+
+        return [o for o in opens if is_close(o)]
+    
+    def cancel_close_orders(self, symbol: str) -> int:
+        """
+        取消所有「會關倉」的條件單（TP/SL/STOP/TAKE_PROFIT）。
+        回傳取消數量。
+        """
+        targets = self.list_close_orders(symbol)
+        cnt = 0
+        for o in targets:
+            try:
+                self.client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+                cnt += 1
+            except BinanceAPIException as e:
+                print(f"⚠️ 取消關倉單失敗 {symbol} #{o.get('orderId')}: {e}")
+        if cnt:
+            print(f"🧹 已清除 {symbol} 舊 TP/SL/STOP 類單 {cnt} 筆")
+        return cnt
     
     def get_server_time(self) -> Dict[str, Any]:
         """获取服务器时间"""

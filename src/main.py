@@ -207,15 +207,15 @@ class TradingBot:
             # 获取历史决策
             history = self.decision_history[-300:] if self.decision_history else []
             # 构建多币种提示词
-            prompt = self.prompt_builder.build_multi_symbol_analysis_prompt_json(all_symbols_data, all_positions, account_summary , history)
+            prompt = self.prompt_builder.build_multi_symbol_analysis_prompt_json(all_symbols_data, account_summary , history)
 
             
             # 调用AI
             print(f"\n🤖 调用AI一次性分析所有币种...")
             print(f"\n{'='*60}")
             print("📤 发送给AI的完整提示词:")
-            # print(f"{'='*60}")
-            # print(prompt)
+            print(f"{'='*60}")
+            print(prompt)
             print(f"{'='*60}\n")
             
             response = self.ai_client.analyze_and_decide(prompt)
@@ -291,7 +291,7 @@ class TradingBot:
             print(f"   动作: {decision['action']}")
             print(f"   信心: {decision['confidence']:.2f}")
             print(f"   杠杆: {decision['leverage']}x")
-            print(f"   仓位: {decision['position_percent']}%")
+            print(f"   仓位: {decision['open_percent']}%")
             print(f"   理由: {decision['reason']}")
             
             return decision
@@ -360,6 +360,19 @@ class TradingBot:
                 # 持有
                 print(f"💤 {symbol} 保持现状")
                 
+            
+            elif action == 'PARTIAL_CLOSE':
+                pct = decision.get('partial_close_percent')
+                try:
+                    pct = float(pct)
+                except Exception:
+                    pct = None
+                if not pct or pct <= 0 or pct > 100:
+                    print(f"⚠️ {symbol} 部分減倉比例無效: {pct}")
+                    return
+                self.trade_executor.close_position_partial(symbol, pct / 100.0)
+
+
         except Exception as e:
             print(f"❌ 执行决策失败 {symbol}: {e}")
     
@@ -379,8 +392,8 @@ class TradingBot:
         
         # 计算仓位数量
         leverage = decision['leverage']
-        position_percent = decision['position_percent'] / 100
-        position_value = leverage * total_equity * position_percent
+        open_percent = decision['open_percent'] / 100
+        position_value = leverage * total_equity * open_percent
         quantity = position_value / current_price
         
         # 检查数量是否有效
@@ -434,8 +447,8 @@ class TradingBot:
         
         # 计算仓位数量
         leverage = decision['leverage']
-        position_percent = decision['position_percent'] / 100
-        position_value = leverage * total_equity * position_percent
+        open_percent = decision['open_percent'] / 100
+        position_value = leverage * total_equity * open_percent
         quantity = position_value / current_price
         
         # 检查数量是否有效
@@ -482,17 +495,29 @@ class TradingBot:
         except Exception as e:
             print(f"❌ {symbol} 平仓失败: {e}")
     
-    def save_decision(self, symbol: str, decision: Dict[str, Any], market_data: Dict[str, Any]):
+    def save_decision(self, symbol: str, decision: Dict[str, Any], market_data: Dict[str, Any] , position:Optional[Dict[str, Any]]):
         """保存决策历史（記憶體 + 檔案）"""
+        p_obj: Dict[str, Any] = {}
+        if position:
+            p_obj = {
+                "side": position.get("side") or ("LONG" if self._to_float(position.get("positionAmt"), 0.0) > 0 else "SHORT"),
+                "positionAmt": self.prompt_builder ._round_qty(symbol, position.get("positionAmt", 0.0)),
+                "entry_price": self.prompt_builder ._round_price(symbol, position.get("entry_price", 0.0)),
+                "leverage": self.prompt_builder ._to_float(position.get("leverage"), 0.0),
+                "unrealized_pnl": self.prompt_builder ._get(position, "unrealized_pnl", 0.0, 4),
+                "pnl_percent": self.prompt_builder ._get(position, "pnl_percent", 0.0, 4),
+                "isolatedMargin": self.prompt_builder ._get(position, "isolatedMargin", 0.0, 4),
+            }
         decision_record = {
             'timestamp': datetime.now().isoformat(),
             'symbol': symbol,
             'action': decision['action'],
             'confidence': decision['confidence'],
             'leverage': decision['leverage'],
-            'position_percent': decision['position_percent'],
+            'open_percent': decision['open_percent'],
             'reason': decision['reason'],
-            'price': market_data['realtime'].get('price', 0)
+            'price': market_data['realtime'].get('price', 0),
+            'positionAfterExecution' : p_obj
         }
         # 先存記憶體
         self.decision_history.append(decision_record)
@@ -545,8 +570,9 @@ class TradingBot:
             for symbol, decision in all_decisions.items():
                 print(f"\n--- {symbol} ---")
                 market_data = all_symbols_data[symbol]['market_data']
-                self.save_decision(symbol, decision, market_data)
                 self.execute_decision(symbol, decision, market_data)
+                position = self.position_data.get_current_position(symbol)
+                self.save_decision(symbol, decision, market_data , position)
                 
         else:
             # 方式2：单个币种分析（保持兼容）

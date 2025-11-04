@@ -102,8 +102,14 @@ class TradeExecutor:
             # 设置止盈止损（量化 stopPrice）
             if take_profit or stop_loss:
                 time.sleep(1)  # 等待订单成交
-                tp, sl = self._quantize_stop_prices(symbol, take_profit, stop_loss)
-                self._set_take_profit_stop_loss(symbol, 'BUY', adj_qty, tp, sl)
+                # 用「覆蓋式」TP/SL，會先清掉舊的
+                self.update_take_profit_stop_loss(
+                    symbol=symbol,
+                    side='BUY',   # open_long 用 BUY；open_short 用 SELL
+                    quantity=adj_qty,
+                    take_profit=take_profit,
+                    stop_loss=stop_loss
+                )
 
             return order
         except Exception as e:
@@ -142,8 +148,14 @@ class TradeExecutor:
             # 设置止盈止损（量化 stopPrice）
             if take_profit or stop_loss:
                 time.sleep(1)
-                tp, sl = self._quantize_stop_prices(symbol, take_profit, stop_loss)
-                self._set_take_profit_stop_loss(symbol, 'SELL', adj_qty, tp, sl)
+                # 用「覆蓋式」TP/SL，會先清掉舊的
+                self.update_take_profit_stop_loss(
+                    symbol=symbol,
+                    side='BUY',   # open_long 用 BUY；open_short 用 SELL
+                    quantity=adj_qty,
+                    take_profit=take_profit,
+                    stop_loss=stop_loss
+                )
 
             return order
         except Exception as e:
@@ -221,7 +233,8 @@ class TradeExecutor:
             order = self.client.create_market_order(
                 symbol=symbol,
                 side=side,
-                quantity=adj_qty
+                quantity=adj_qty,
+                reduceOnly=True   # ← 關鍵：確保只會減少現有倉位
             )
 
             print(f"✅ 部分平仓成功: {symbol} {adj_qty} ({percentage*100}%)")
@@ -264,3 +277,35 @@ class TradeExecutor:
 
         except Exception as e:
             print(f"⚠️ 设置止盈止损失败: {e}")
+    
+    def update_take_profit_stop_loss(self, symbol: str, side: str,
+                                 quantity: float,
+                                 take_profit: float = None,
+                                 stop_loss: float = None):
+        """
+        先清舊的 TP/SL/STOP 類單，再依目前設定建立新的。
+        """
+        try:
+            # 先砍掉會關倉的舊條件單，避免累積
+            try:
+                self.client.cancel_close_orders(symbol)
+            except Exception as e:
+                print(f"⚠️ 清除舊 TP/SL 失敗（繼續覆蓋）: {e}")
+
+            # 再設新的
+            tp, sl = self._quantize_stop_prices(symbol, take_profit, stop_loss)
+            self.client.set_take_profit_stop_loss(
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                take_profit_price=tp,
+                stop_loss_price=sl
+            )
+
+            if tp:
+                print(f"   📈 新止盈價: ${self._fmt_price(tp)}")
+            if sl:
+                print(f"   🛑 新止損價: ${self._fmt_price(sl)}")
+
+        except Exception as e:
+            print(f"⚠️ 更新 TP/SL 失敗: {e}")

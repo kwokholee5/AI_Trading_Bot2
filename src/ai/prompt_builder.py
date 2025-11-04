@@ -40,7 +40,7 @@ class PromptBuilder:
         self.config = config
         self.ai_config = config.get("ai", {})
         # 预设的时间框架输出顺序（只输出存在于资料中的）
-        self.default_intervals = ["5m", "15m", "1h", "4h", "1d"]
+        self.default_intervals = ["3m" , "5m", "15m", "1h", "4h", "1d"]
         self.symbol_precisions = precision_map
 
     # ---------------------------
@@ -207,7 +207,6 @@ class PromptBuilder:
                     "action": rec.get("action"),
                     "confidence": self._norm_confidence(rec.get("confidence")),
                     "leverage": self._to_float(rec.get("leverage"), 0.0),
-                    "position_percent": self._to_float(rec.get("position_percent"), 0.0),
                     "reason": rec.get("reason"),
                     "price": self._to_float(rec.get("price"), 0.0),
                 }
@@ -390,7 +389,6 @@ class PromptBuilder:
     def build_multi_symbol_analysis_payload(
         self,
         all_symbols_data: Dict[str, Any],
-        all_positions: Dict[str, Any],
         account_summary: Optional[Dict[str, Any]] = None,
         decision_history: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
@@ -491,7 +489,6 @@ class PromptBuilder:
     def build_multi_symbol_analysis_prompt_json(
         self,
         all_symbols_data: Dict[str, Any],
-        all_positions: Dict[str, Any],
         account_summary: Optional[Dict[str, Any]] = None,
         decision_history: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
@@ -500,7 +497,7 @@ class PromptBuilder:
         模型请以该 JSON 为依据，回传每个币种的决策 JSON。
         """
         payload = self.build_multi_symbol_analysis_payload(
-            all_symbols_data, all_positions, account_summary, decision_history
+            all_symbols_data, account_summary, decision_history
         )
         payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -510,11 +507,12 @@ class PromptBuilder:
 
 {{
   "BTCUSDT": {{
-    "action": "BUY_OPEN" | "SELL_OPEN" | "CLOSE" | "HOLD" | "ADD_BUY_OPEN" | "ADD_SELL_OPEN",
+    "action": "BUY_OPEN" | "SELL_OPEN" | "CLOSE" | "HOLD" | "ADD_BUY_OPEN" | "ADD_SELL_OPEN | PARTIAL_CLOSE",
     "reason": "1-2句话说明决策理由（含关键指标与数值）",
     "confidence": 0.0 - 1.0,
     "leverage":  {self.config.get('trading', {}).get('default_leverage', 10)}-{self.config.get('trading', {}).get('max_leverage', 10)},
-    "position_percent": 0-10,
+    "open_percent": 0-10,
+    "partial_close_percent" : 0-100,
     "take_profit_percent":  {self.config.get('risk', {}).get('take_profit_low', 10)}-{self.config.get('risk', {}).get('take_profit_high', 10)},
     "stop_loss_percent":  {self.config.get('risk', {}).get('stop_loss_low', 10)}-{self.config.get('risk', {}).get('stop_loss_high', 10)}
   }},
@@ -535,23 +533,23 @@ class PromptBuilder:
   - `kdj`: 最近 10 筆 kdj
   - `pattern`: 近幾根 K 線辨識形態（舊→新）
   
-倉位说明：
+#倉位说明：
 - 每个币种单独决策，依市场状况 BUY_OPEN(作多)/SELL_OPEN(作空)/ADD_BUY_OPEN(加倉作多)/ADD_SELL_OPEN(加倉作空)
-- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/position_percent/take_profit_percent/stop_loss_percent
-- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损百分比。 position_percent為 5-10
-- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损百分比,position_percent 為 1-5
-- 我會根據你回傳的position_percent,leverage來開倉
-  開倉所使用的保證金(isolatedMargin)為 equity*position_percent
+- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/open_percent/take_profit_percent/stop_loss_percent
+- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损百分比。 
+- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损百分比,
+- PARTIAL_CLOSE 為減倉, 只用來確保利潤,不用來減少損失
+- 我會根據你回傳的open_percent,leverage來開倉
+  開倉所使用的保證金(isolatedMargin)為 equity*open_percent
   若所有艙位的isolatedMargin合超過equity的70%, 則不可開倉或加倉
 - take_profit_percent/stop_loss_percent 會因為leverage而擴大
   例如設定stop_loss_percent為-2%,在leverage=10的情況下,幣價下跌2%,實際損失20%
 - 單个币种(倉位)的最大忍受損失程度為{self.config.get('risk', {}).get('position_tolerance', 10)}% 若超過則無條件CLOSE
 - 不要只做多! 
 
-技術指標資料說明:
+#技術指標資料說明:
 - time_frame:1d 用來判斷大方向,空頭趨勢盡量做空,多頭趨勢盡量做多
-- time_frame:1h 用來判斷是否開倉,也可用來判斷是否獲利了結/停損
-- time_frame:3m 用來判斷短時間內是否有跟現有艙位反方向的大行情出現, 判斷是否需要緊急平倉
+- time_frame:1h,3m 用來判斷是否開倉,也可用來判斷是否獲利了結/停損
 - 可参考 market_data 内不同 time_frame 的 RSI/MACD/HIST/KDJ/BOLL 皆为「旧→新」序列）。
 - 每个币种下方含有该币的 decision_history（旧→新），可用以对齐你的建议与既有持仓/历史。
 - **decision_history（舊→新）**：請審視最近數筆紀錄，並遵循：
@@ -561,10 +559,10 @@ class PromptBuilder:
   4) **具體化理由**：在 reason 中說明「相對於最近一次操作的變化點」（例：「上次 BUY_OPEN 後，4h MACD 由正轉負且 KDJ 死亡交叉，決定 CLOSE」）
 - 若本次建議與歷史方向相反，請在 reason 中**明確列出反轉依據**（指標交叉、零軸穿越、布林結構改變、關鍵位失守/站回）
 
-# 当前时间
+#当前时间
 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-# 市场资料 JSON（请据此做判断）
+#市场资料 JSON（请据此做判断）
 {payload_json}
 """.strip()
 
