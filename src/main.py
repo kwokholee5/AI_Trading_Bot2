@@ -412,10 +412,8 @@ class TradingBot:
             return
         
         # 计算止盈止损价格
-        take_profit_percent = decision.get('take_profit_percent', 5.0)
-        stop_loss_percent = decision.get('stop_loss_percent', -2.0)
-        take_profit = current_price * (1 + take_profit_percent / 100)
-        stop_loss = current_price * (1 + stop_loss_percent / 100)
+        take_profit = decision.get('take_profit')
+        stop_loss = decision.get('stop_loss')
         
         # 执行开仓
         try:
@@ -467,10 +465,8 @@ class TradingBot:
             return
         
         # 计算止盈止损价格
-        take_profit_percent = decision.get('take_profit_percent', 5.0)
-        stop_loss_percent = decision.get('stop_loss_percent', -2.0)
-        take_profit = current_price * (1 - take_profit_percent / 100)  # 做空止盈价降低
-        stop_loss = current_price * (1 + abs(stop_loss_percent) / 100)  # 做空止损价提高
+        take_profit = decision.get('take_profit')
+        stop_loss = decision.get('stop_loss')
         
         # 执行开仓
         try:

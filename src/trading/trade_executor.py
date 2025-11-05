@@ -147,7 +147,7 @@ class TradeExecutor:
 
             # 设置止盈止损（量化 stopPrice）
             if take_profit or stop_loss:
-                time.sleep(1)
+                time.sleep(2)
                 # 用「覆蓋式」TP/SL，會先清掉舊的
                 self.update_take_profit_stop_loss(
                     symbol=symbol,

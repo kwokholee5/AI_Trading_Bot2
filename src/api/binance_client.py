@@ -399,7 +399,7 @@ class BinanceClient:
             return orders
             
         except BinanceAPIException as e:
-            print(f"⚠️ 设置止盈止损失败 {symbol}: {e}")
+            print(f"⚠️ 设置止盈止损失败 {symbol}: {e} tp: {take_profit_price} sl: {stop_loss_price}")
             raise
     
     # ==================== 查询订单 ====================

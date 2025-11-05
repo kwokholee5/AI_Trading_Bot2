@@ -517,8 +517,8 @@ class PromptBuilder:
     "leverage":  {self.config.get('trading', {}).get('default_leverage', 10)}-{self.config.get('trading', {}).get('max_leverage', 10)},
     "open_percent": 0-10,
     "reduce_percent" : 0-100,
-    "take_profit_percent":  {self.config.get('risk', {}).get('take_profit_low', 10)}-{self.config.get('risk', {}).get('take_profit_high', 10)},
-    "stop_loss_percent":  {self.config.get('risk', {}).get('stop_loss_low', 10)}-{self.config.get('risk', {}).get('stop_loss_high', 10)}
+    "take_profit":  90000,
+    "stop_loss":  8000
   }},
   "...": {{ ... }}
 }}
@@ -554,23 +554,27 @@ class PromptBuilder:
 
 #倉位说明：
 - 每个币种单独决策，依市场状况 BUY_OPEN(作多)/SELL_OPEN(作空)/ADD_BUY_OPEN(加倉作多)/ADD_SELL_OPEN(加倉作空)
-- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/open_percent/take_profit_percent/stop_loss_percent
-- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损百分比。 
-- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损百分比,
-- PARTIAL_CLOSE 為減倉, 只用來確保利潤,不用來減少損失 , 需帶入reduce_percent
+- 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/open_percent/take_profit/stop_loss
+- BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损價位。 
+- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损價位
+- take_profit : 開倉價位加{self.config.get('risk', {}).get('take_profit_low', 1)} - {self.config.get('risk', {}).get('take_profit_high', 10)}%
+- stop_loss   : 開倉價位減{self.config.get('risk', {}).get('stop_loss_low', 1)} - {self.config.get('risk', {}).get('stop_loss_high', 10)}%
 - 我會根據你回傳的open_percent,leverage來開倉
   開倉所使用的保證金(isolatedMargin)為 equity*open_percent
-  若所有艙位的isolatedMargin合超過equity的70%, 則不可開倉或加倉
-- 不要只做多! 
+  若所有艙位的isolatedMargin合超過equity的{100 - self.config.get('trading', {}).get('reserve_percent', 10)}%, 則不可開倉或加倉
+- PARTIAL_CLOSE 為減倉, 只用來確保利潤,不用來減少損失 , 需帶入reduce_percent
+  1) 考慮減倉時,請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
+     得到的數字超過 {self.config.get('risk', {}).get('reduce_if_over', 10)}% 才能鎖定利潤
+  2) 根據前一個positionAfterExecution,比對這次的pnl_percent減少超過{self.config.get('risk', {}).get('reduce_if_fallback', 10)}%時, 可考慮鎖定利潤
+  3) 不可以連續三次PARTIAL_CLOSE,若判斷反轉請直接CLOSE
+  4) reduce_percent根據信心來設置,10-30%,若認為趨勢會延續,則設定低一點, 反之亦然
 - 若技術分析結果與市場情況相反,造成倉位浮虧的時候:
   請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
   得到的數字超過 {self.config.get('risk', {}).get('position_tolerance', 10)}% 再考慮停損
-- 在考慮減倉時:
-  請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
-  得到的數字超過 {self.config.get('risk', {}).get('reduce_if_over', 10)}% 再考慮鎖定利潤
-  或是根據decision_history上一次的艙位,獲利減少超過{self.config.get('risk', {}).get('reduce_if_fallback', 10)}%時,再考慮鎖定利潤
+
 
 #額外說明
+-不要只做多! 
 -不要抄底摸頭追漲殺跌
 -順向交易
 -不要頻繁開倉關倉,有足夠信心再給開倉信號,不要一點虧損就賣出

@@ -5,7 +5,7 @@
     "max_leverage": 5,
     "min_position_percent": 10,
     "max_position_percent": 15,
-    "reserve_percent": 10
+    "reserve_percent": 20
   },
   "paths": {
     "state_dir": "./state",
@@ -15,10 +15,10 @@
   "risk": {
     "max_daily_loss_percent": 40,
     "max_consecutive_losses": 5,
-    "stop_loss_low": -2,
-    "stop_loss_high": -5,
+    "stop_loss_low": 2,
+    "stop_loss_high": 10,
     "take_profit_low": 2,
-    "take_profit_high": 5,
+    "take_profit_high": 10,
     "reduce_if_over" : 3,
     "reduce_if_fallback" : 30,
     "position_tolerance" : -3
