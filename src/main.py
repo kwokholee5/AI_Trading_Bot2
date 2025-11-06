@@ -27,40 +27,49 @@ from src.ai.deepseek_client import DeepSeekClient
 from src.ai.prompt_builder import PromptBuilder
 from src.ai.decision_parser import DecisionParser
 from src.utils.symbol_filters import SymbolFilters
+from src.utils.logger import init_all_loggers, get_logger
+from src.utils.discord import notify_discord
 
 class TradingBot:
     """交易机器人主类"""
     
     def __init__(self, config_path: str = 'config/trading_config.json'):
+        self.logs = init_all_loggers()
+        self.log_ai = get_logger("ai")
+        self.log_trade = get_logger("trade")
+        self.log_sys = get_logger("system")
+        self.log_prompt = get_logger("prompt")
+        self.log_debug = get_logger("debug")
+        self.log_binance_client = get_logger("binance_client")
         """初始化交易机器人"""
-        print("=" * 60)
-        print("🚀 AI交易机器人启动中...")
-        print("=" * 60)
+        self.log_ai.info("=" * 60)
+        self.log_ai.info("🚀 AI交易机器人启动中...")
+        self.log_ai.info("=" * 60)
         
         # 加载配置
         self.config = ConfigLoader.load_trading_config(config_path)
-        print(f"✅ 配置加载完成")
+        self.log_ai.info(f"✅ 配置加载完成")
         
         # 加载环境变量
         EnvManager.load_env_file('.env')
-        print(f"✅ 环境变量加载完成")
+        self.log_ai.info(f"✅ 环境变量加载完成")
         
         # 初始化客户端
         self.client = self._init_binance_client()
         self.ai_client = self._init_ai_client()
-        print(f"✅ API客户端初始化完成")
+        self.log_ai.info(f"✅ API客户端初始化完成")
         
         # 初始化管理器
         self.market_data = MarketDataManager(self.client)
         self.position_data = PositionDataManager(self.client)
         self.account_data = AccountDataManager(self.client)
-        print(f"✅ 数据管理器初始化完成")
+        self.log_ai.info(f"✅ 数据管理器初始化完成")
         
         # 初始化交易执行器和风险管理器
         self.trade_executor = TradeExecutor(self.client, self.config)
         self.position_manager = PositionManager(self.client)
         self.risk_manager = RiskManager(self.config)
-        print(f"✅ 交易执行器初始化完成")
+        self.log_ai.info(f"✅ 交易执行器初始化完成")
         
         # === 新增：本地歷史檔案設定 ===
         paths_cfg = self.config.get('paths', {})
@@ -76,16 +85,15 @@ class TradingBot:
         precision_map = self._build_precision_map(symbols)
         self.prompt_builder = PromptBuilder(self.config, precision_map)
         self.decision_parser = DecisionParser()
-        print(f"✅ AI组件初始化完成")
+        self.log_ai.info(f"✅ AI组件初始化完成")
         
         # 状态追踪（從本地載入歷史）
         self.decision_history: List[Dict[str, Any]] = self._load_decision_history(self.history_file, self.max_history)
         self.trade_count = 0
         
-        print("=" * 60)
-        print("🎉 AI交易机器人启动成功！")
-        print("=" * 60)
-        print()
+        self.log_ai.info("=" * 60)
+        self.log_ai.info("🎉 AI交易机器人启动成功！")
+        self.log_ai.info("=" * 60)
 
     # === 新增：歷史檔案 I/O ===
     def _load_decision_history(self, path: Path, limit: int) -> List[Dict[str, Any]]:
@@ -121,7 +129,7 @@ class TradingBot:
                 # 只保留最後 limit 筆
                 return records[-limit:]
         except Exception as e:
-            print(f"⚠️ 載入歷史檔案失敗: {e}")
+            self.log_ai.info(f"⚠️ 載入歷史檔案失敗: {e}")
             return []
 
     def _append_history_jsonl(self, path: Path, record: Dict[str, Any]) -> None:
@@ -133,7 +141,7 @@ class TradingBot:
                 f.write(json.dumps(record, ensure_ascii=False))
                 f.write('\n')
         except Exception as e:
-            print(f"⚠️ 寫入歷史檔案失敗: {e}")
+            self.log_ai.info(f"⚠️ 寫入歷史檔案失敗: {e}")
 
     def _compact_history_file(self, path: Path, records: List[Dict[str, Any]]) -> None:
         """
@@ -148,7 +156,7 @@ class TradingBot:
                     f.write('\n')
             os.replace(tmp, path)
         except Exception as e:
-            print(f"⚠️ 壓縮歷史檔案失敗: {e}")
+            self.log_ai.info(f"⚠️ 壓縮歷史檔案失敗: {e}")
 
     def _build_precision_map(self, symbols: list[str]) -> Dict[str, Dict[str, int]]:
         pm: Dict[str, Dict[str, int]] = {}
@@ -211,12 +219,11 @@ class TradingBot:
 
             
             # 调用AI
-            print(f"\n🤖 调用AI一次性分析所有币种...")
-            print(f"\n{'='*60}")
-            print("📤 发送给AI的完整提示词:")
-            print(f"{'='*60}")
-            print(prompt)
-            print(f"{'='*60}\n")
+            self.log_sys.info(f"\n🤖 调用AI一次性分析所有币种...")
+            self.log_sys.info(f"\n{'='*60}")
+            self.log_prompt.info(f"{'='*60}")
+            self.log_prompt.info(prompt)
+            self.log_prompt.info(f"{'='*60}\n")
             
             response = self.ai_client.analyze_and_decide(prompt)
             
@@ -224,34 +231,43 @@ class TradingBot:
             reasoning = self.ai_client.get_reasoning(response)
             
             if reasoning:
-                print(f"\n{'='*60}")
-                print(f"🧠 AI思维链（详细分析）")
-                print(f"{'='*60}")
-                print(reasoning)
-                print(f"{'='*60}\n")
+                self.log_ai.info(f"🧠 AI思维链（详细分析）")
+                self.log_ai.info(f"{'='*60}")
+                self.log_ai.info(reasoning)
+                self.log_ai.info(f"{'='*60}\n")
             
             # 显示AI原始回复
-            print(f"\n{'='*60}")
-            print(f"🤖 AI原始回复:")
-            print(f"{'='*60}")
-            print(response['content'])
-            print(f"{'='*60}\n")
+            self.log_ai.info(f"🤖 AI原始回复:")
+            self.log_ai.info(f"{'='*60}")
+            self.log_ai.info(response['content'])
+            self.log_ai.info(f"{'='*60}\n")
             
             # 解析决策
             decisions = self.decision_parser.parse_multi_symbol_response(response['content'])
             
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            content = f"🕒 Deepseek决策总结 @({now_str})\n"
             # 显示所有决策
-            print(f"\n{'='*60}")
-            print(f"📊 AI多币种决策总结:")
-            print(f"{'='*60}")
+            self.log_ai.info(f"📊 AI多币种决策总结:")
+            self.log_ai.info(f"{'='*60}")
+            all_hold = True  # 檢查用旗標
             for symbol, decision in decisions.items():
-                print(f"   {symbol}: {decision['action']} - {decision['reason']}")
-            print(f"{'='*60}\n")
-            
+                action = decision.get('action', 'HOLD').upper()
+                self.log_ai.info(f"   {symbol}: {decision['action']} - {decision['reason']}")
+                content += (f"{symbol}: {decision['action']} \n")
+                content += (f"{decision['reason']}\n")
+                content += (f"{' '*20}\n")
+                if action != "HOLD":
+                    all_hold = False
+                    
+            self.log_ai.info(f"{'='*60}\n")
+            if not all_hold:
+                notify_discord(content)
+            else:
+                notify_discord(f"策略未改變,省略通知@{now_str}")
             return decisions
-            
         except Exception as e:
-            print(f"❌ AI分析失败: {e}")
+            self.log_ai.info(f"❌ AI分析失败: {e}")
             import traceback
             traceback.print_exc()
             return {}
@@ -274,7 +290,7 @@ class TradingBot:
             )
             
             # 调用AI
-            print(f"\n🤖 调用AI分析 {symbol}...")
+            self.log_ai.info(f"\n🤖 调用AI分析 {symbol}...")
             response = self.ai_client.analyze_and_decide(prompt)
             
             # 解析决策
@@ -283,21 +299,21 @@ class TradingBot:
             # 显示AI推理过程
             reasoning = self.ai_client.get_reasoning(response)
             if reasoning:
-                print(f"\n💭 {symbol} AI推理:")
-                print(reasoning)
+                self.log_ai.info(f"\n💭 {symbol} AI推理:")
+                self.log_ai.info(reasoning)
             
             # 显示决策
-            print(f"\n📊 {symbol} AI决策:")
-            print(f"   动作: {decision['action']}")
-            print(f"   信心: {decision['confidence']:.2f}")
-            print(f"   杠杆: {decision['leverage']}x")
-            print(f"   仓位: {decision['open_percent']}%")
-            print(f"   理由: {decision['reason']}")
+            self.log_ai.info(f"\n📊 {symbol} AI决策:")
+            self.log_ai.info(f"   动作: {decision['action']}")
+            self.log_ai.info(f"   信心: {decision['confidence']:.2f}")
+            self.log_ai.info(f"   杠杆: {decision['leverage']}x")
+            self.log_ai.info(f"   仓位: {decision['open_percent']}%")
+            self.log_ai.info(f"   理由: {decision['reason']}")
             
             return decision
             
         except Exception as e:
-            print(f"❌ AI分析失败 {symbol}: {e}")
+            self.log_ai.info(f"❌ AI分析失败 {symbol}: {e}")
             return self.decision_parser._get_default_decision()
     
     def execute_decision(self, symbol: str, decision: Dict[str, Any], market_data: Dict[str, Any]):
@@ -319,14 +335,14 @@ class TradingBot:
         
         # 如果信心度太低，不执行
         if confidence < 0.5 and action != 'CLOSE':
-            print(f"⚠️ {symbol} 信心度太低({confidence:.2f})，跳过执行")
+            self.log_ai.info(f"⚠️ {symbol} 信心度太低({confidence:.2f})，跳过执行")
             return
         
         try:
             # 获取账户信息
             account_summary = self.account_data.get_account_summary()
             if not account_summary:
-                print(f"⚠️ {symbol} 无法获取账户信息")
+                self.log_ai.info(f"⚠️ {symbol} 无法获取账户信息")
                 return
             
             total_equity = account_summary['equity']
@@ -334,7 +350,7 @@ class TradingBot:
             # 获取当前价格
             current_price = market_data['realtime'].get('price', 0)
             if current_price == 0:
-                print(f"⚠️ {symbol} 无法获取当前价格")
+                self.log_ai.info(f"⚠️ {symbol} 无法获取当前价格")
                 return
             
             if action == 'BUY_OPEN':
@@ -358,7 +374,7 @@ class TradingBot:
                 
             elif action == 'HOLD':
                 # 持有
-                print(f"💤 {symbol} 保持现状")
+                self.log_ai.info(f"💤 {symbol} 保持现状")
                 
             
             elif action == 'PARTIAL_CLOSE':
@@ -368,26 +384,26 @@ class TradingBot:
                 except Exception:
                     pct = None
                 if not pct or pct <= 0 or pct > 100:
-                    print(f"⚠️ {symbol} 部分減倉比例無效: {pct}")
+                    self.log_ai.info(f"⚠️ {symbol} 部分減倉比例無效: {pct}")
                     return
                 self.trade_executor.close_position_partial(symbol, pct / 100.0)
 
 
         except Exception as e:
-            print(f"❌ 执行决策失败 {symbol}: {e}")
+            self.log_ai.info(f"❌ 执行决策失败 {symbol}: {e}")
     
     def _open_long(self, symbol: str, decision: Dict[str, Any], total_equity: float, current_price: float):
         """开多仓"""
         # 检查账户余额
         if total_equity <= 0:
-            print(f"⚠️ {symbol} 账户余额为0，无法开仓")
-            print(f"   请确保账户有足够的 USDT 余额")
+            self.log_ai.info(f"⚠️ {symbol} 账户余额为0，无法开仓")
+            self.log_ai.info(f"   请确保账户有足够的 USDT 余额")
             return
         
         # 检查是否已有持仓
         # position = self.position_data.get_current_position(symbol)
         # if position:
-        #     print(f"⚠️ {symbol} 已有持仓，无法开多仓")
+        #     self.log_ai.info(f"⚠️ {symbol} 已有持仓，无法开多仓")
         #     return
         
         # 计算仓位数量
@@ -398,7 +414,7 @@ class TradingBot:
         
         # 检查数量是否有效
         if quantity <= 0:
-            print(f"❌ {symbol} 计算出的数量无效: {quantity} (账户余额: {total_equity})")
+            self.log_ai.info(f"❌ {symbol} 计算出的数量无效: {quantity} (账户余额: {total_equity})")
             return
         
         # 风险检查
@@ -406,9 +422,9 @@ class TradingBot:
             symbol, quantity, current_price, total_equity, total_equity
         )
         if not ok:
-            print(f"❌ {symbol} 风控检查失败:")
+            self.log_ai.info(f"❌ {symbol} 风控检查失败:")
             for err in errors:
-                print(f"   - {err}")
+                self.log_ai.info(f"   - {err}")
             return
         
         # 计算止盈止损价格
@@ -424,23 +440,23 @@ class TradingBot:
                 take_profit=take_profit,
                 stop_loss=stop_loss
             )
-            print(f"✅ {symbol} 开多仓成功")
+            self.log_ai.info(f"✅ {symbol} 开多仓成功")
             self.trade_count += 1
         except Exception as e:
-            print(f"❌ {symbol} 开多仓失败: {e}")
+            self.log_ai.info(f"❌ {symbol} 开多仓失败: {e}")
     
     def _open_short(self, symbol: str, decision: Dict[str, Any], total_equity: float, current_price: float):
         """开空仓"""
         # 检查账户余额
         if total_equity <= 0:
-            print(f"⚠️ {symbol} 账户余额为0，无法开仓")
-            print(f"   请确保账户有足够的 USDT 余额")
+            self.log_ai.info(f"⚠️ {symbol} 账户余额为0，无法开仓")
+            self.log_ai.info(f"   请确保账户有足够的 USDT 余额")
             return
         
         # 检查是否已有持仓
         # position = self.position_data.get_current_position(symbol)
         # if position:
-        #     print(f"⚠️ {symbol} 已有持仓，无法开空仓")
+        #     self.log_ai.info(f"⚠️ {symbol} 已有持仓，无法开空仓")
         #     return
         
         # 计算仓位数量
@@ -451,7 +467,7 @@ class TradingBot:
         
         # 检查数量是否有效
         if quantity <= 0:
-            print(f"❌ {symbol} 计算出的数量无效: {quantity} (账户余额: {total_equity})")
+            self.log_ai.info(f"❌ {symbol} 计算出的数量无效: {quantity} (账户余额: {total_equity})")
             return
         
         # 风险检查
@@ -459,9 +475,9 @@ class TradingBot:
             symbol, quantity, current_price, total_equity, total_equity
         )
         if not ok:
-            print(f"❌ {symbol} 风控检查失败:")
+            self.log_ai.info(f"❌ {symbol} 风控检查失败:")
             for err in errors:
-                print(f"   - {err}")
+                self.log_ai.info(f"   - {err}")
             return
         
         # 计算止盈止损价格
@@ -477,19 +493,19 @@ class TradingBot:
                 take_profit=take_profit,
                 stop_loss=stop_loss
             )
-            print(f"✅ {symbol} 开空仓成功")
+            self.log_ai.info(f"✅ {symbol} 开空仓成功")
             self.trade_count += 1
         except Exception as e:
-            print(f"❌ {symbol} 开空仓失败: {e}")
+            self.log_ai.info(f"❌ {symbol} 开空仓失败: {e}")
     
     def _close_position(self, symbol: str, decision: Dict[str, Any]):
         """平仓"""
         try:
             self.trade_executor.close_position(symbol)
-            print(f"✅ {symbol} 平仓成功")
+            self.log_ai.info(f"✅ {symbol} 平仓成功")
             self.trade_count += 1
         except Exception as e:
-            print(f"❌ {symbol} 平仓失败: {e}")
+            self.log_ai.info(f"❌ {symbol} 平仓失败: {e}")
     
     def save_decision(self, symbol: str, decision: Dict[str, Any], market_data: Dict[str, Any] , position:Optional[Dict[str, Any]]):
         """保存决策历史（記憶體 + 檔案）"""
@@ -503,6 +519,8 @@ class TradingBot:
                 "unrealized_pnl": self.prompt_builder ._get(position, "unrealized_pnl", 0.0, 4),
                 "pnl_percent": self.prompt_builder ._get(position, "pnl_percent", 0.0, 4),
                 "isolatedMargin": self.prompt_builder ._get(position, "isolatedMargin", 0.0, 4),
+                "take_profit": self.prompt_builder ._get(position, "take_profit", 0.0, 4),
+                "stop_loss": self.prompt_builder ._get(position, "stop_loss", 0.0, 4),
             }
         decision_record = {
             'timestamp': datetime.now().isoformat(),
@@ -529,13 +547,13 @@ class TradingBot:
             if len(self.decision_history) == self.max_history:
                 self._compact_history_file(self.history_file, self.decision_history)
         except Exception as e:
-            print(f"⚠️ 壓縮歷史檔案時發生錯誤: {e}")
+            self.log_ai.info(f"⚠️ 壓縮歷史檔案時發生錯誤: {e}")
     
     def run_cycle(self):
         """执行一个交易周期"""
-        print("\n" + "=" * 60)
-        print(f"📅 交易周期 #{self.trade_count + 1} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("=" * 60)
+        self.log_ai.info("\n" + "=" * 60)
+        self.log_ai.info(f"📅 交易周期 #{self.trade_count + 1} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.log_ai.info("=" * 60)
         
         # 获取交易币种列表
         symbols = ConfigLoader.get_trading_symbols(self.config)
@@ -543,10 +561,10 @@ class TradingBot:
         # 显示账户摘要
         account_summary = self.account_data.get_account_summary()
         if account_summary:
-            print(f"\n💰 账户信息:")
-            print(f"   总权益: {account_summary['equity']:.2f} USDT")
-            print(f"   未实现盈亏: {account_summary['total_unrealized_pnl']:.2f} USDT")
-            print(f"   保证金率: {account_summary['margin_ratio']:.2f}%")
+            self.log_ai.info(f"\n💰 账户信息:")
+            self.log_ai.info(f"   总权益: {account_summary['equity']:.2f} USDT")
+            self.log_ai.info(f"   未实现盈亏: {account_summary['total_unrealized_pnl']:.2f} USDT")
+            self.log_ai.info(f"   保证金率: {account_summary['margin_ratio']:.2f}%")
         
         # 方式1：多币种一次性分析（优化）
         if len(symbols) > 1:
@@ -565,7 +583,7 @@ class TradingBot:
             
             # 执行每个币种的决策
             for symbol, decision in all_decisions.items():
-                print(f"\n--- {symbol} ---")
+                self.log_ai.info(f"\n--- {symbol} ---")
                 market_data = all_symbols_data[symbol]['market_data']
                 self.execute_decision(symbol, decision, market_data)
                 position = self.position_data.get_current_position(symbol)
@@ -574,7 +592,7 @@ class TradingBot:
         else:
             # 方式2：单个币种分析（保持兼容）
             for symbol in symbols:
-                print(f"\n--- {symbol} ---")
+                self.log_ai.info(f"\n--- {symbol} ---")
                 
                 # 获取市场数据
                 market_data = self.get_market_data_for_symbol(symbol)
@@ -593,9 +611,9 @@ class TradingBot:
         schedule_config = ConfigLoader.get_schedule_config(self.config)
         interval_seconds = schedule_config['interval_seconds']
         
-        print(f"\n⏱️  交易周期: 每{interval_seconds}秒")
-        print(f"📊 交易币种: {', '.join(ConfigLoader.get_trading_symbols(self.config))}")
-        print(f"\n按 Ctrl+C 停止运行\n")
+        self.log_ai.info(f"\n⏱️  交易周期: 每{interval_seconds}秒")
+        self.log_ai.info(f"📊 交易币种: {', '.join(ConfigLoader.get_trading_symbols(self.config))}")
+        self.log_ai.info(f"\n按 Ctrl+C 停止运行\n")
         
         try:
             while True:
@@ -609,22 +627,22 @@ class TradingBot:
                 sleep_time = max(0, interval_seconds - elapsed)
                 
                 if sleep_time > 0:
-                    print(f"\n💤 等待 {sleep_time:.0f}秒...")
+                    self.log_ai.info(f"\n💤 等待 {sleep_time:.0f}秒...")
                     time.sleep(sleep_time)
                 
         except KeyboardInterrupt:
-            print("\n\n⚠️ 收到中断信号，正在安全退出...")
+            self.log_ai.info("\n\n⚠️ 收到中断信号，正在安全退出...")
             self.shutdown()
     
     def shutdown(self):
         """优雅关闭"""
-        print("\n" + "=" * 60)
-        print("🛑 交易机器人正在关闭...")
-        print("=" * 60)
-        print(f"✅ 本次运行交易次数: {self.trade_count}")
-        print(f"✅ 决策记录数量: {len(self.decision_history)}")
-        print("🎉 交易机器人已安全退出")
-        print("=" * 60)
+        self.log_ai.info("\n" + "=" * 60)
+        self.log_ai.info("🛑 交易机器人正在关闭...")
+        self.log_ai.info("=" * 60)
+        self.log_ai.info(f"✅ 本次运行交易次数: {self.trade_count}")
+        self.log_ai.info(f"✅ 决策记录数量: {len(self.decision_history)}")
+        self.log_ai.info("🎉 交易机器人已安全退出")
+        self.log_ai.info("=" * 60)
 
 
 def main():

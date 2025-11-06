@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from src.api.binance_client import BinanceClient
 from src.utils.decorators import retry_on_failure, log_execution
 from src.utils.symbol_filters import SymbolFilters
+from src.utils.logger import get_logger
 
 
 class TradeExecutor:
@@ -24,7 +25,8 @@ class TradeExecutor:
         self.client = client
         self.config = config
         self.position_manager = None  # 将在外部设置
-
+        self.log = get_logger("trade")  # 專用交易 logger
+        
     # --------------------- 内部工具 ---------------------
 
     def _get_filters(self, symbol: str) -> SymbolFilters:
@@ -78,6 +80,7 @@ class TradeExecutor:
         开多仓
         """
         # 调整杠杆
+        self.log.info("OPEN_LONG %s qty=%s lev=%s", symbol, quantity, leverage)
         if leverage and leverage > 1:
             try:
                 self.client.change_leverage(symbol, leverage)
@@ -123,6 +126,7 @@ class TradeExecutor:
         """
         开空仓
         """
+        self.log.info("OPEN_SHORT %s qty=%s lev=%s", symbol, quantity, leverage)
         # 调整杠杆
         if leverage and leverage > 1:
             try:
@@ -171,6 +175,7 @@ class TradeExecutor:
         平仓（平掉整个持仓）
         会自动判断当前持仓方向并执行反向操作
         """
+        self.log.info("CLOSE_POSITION %s", symbol)
         try:
             position = self.client.get_position(symbol)
             if not position or float(position['positionAmt']) == 0:
@@ -210,6 +215,7 @@ class TradeExecutor:
         """
         部分平仓
         """
+        self.log.info("CLOSE_PARTIAL %s pct=%.2f", symbol, percentage)
         if not 0 < percentage <= 1:
             raise ValueError("平仓比例必须在0-1之间")
 
@@ -285,6 +291,7 @@ class TradeExecutor:
         """
         先清舊的 TP/SL/STOP 類單，再依目前設定建立新的。
         """
+        self.log.info("UPDATE_TP_SL %s tp=%s sl=%s (will cancel old)", symbol, take_profit, stop_loss)
         try:
             # 先砍掉會關倉的舊條件單，避免累積
             try:

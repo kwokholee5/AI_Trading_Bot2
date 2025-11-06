@@ -387,6 +387,19 @@ class PromptBuilder:
         # block["patterns"] = self._detect_candlestick_patterns(ohlc_list) if ohlc_list else []
         return block
 
+    def _opt_price(self, symbol: str, x: Any):
+        """
+        取可選價格欄位；若 x 不存在/<=0/無法轉 float，返回 None。
+        會依該 symbol 的價格精度做四捨五入。
+        """
+        try:
+            v = float(x)
+            if not math.isfinite(v) or v <= 0:
+                return None
+            return self._round_price(symbol, v)
+        except Exception:
+            return None
+        
     # ---------------------------
     # 整体：多币种 → JSON 载荷（dict）
     # ---------------------------
@@ -470,6 +483,18 @@ class PromptBuilder:
                     "pnl_percent": self._get(position, "pnl_percent", 0.0, 4),
                     "isolatedMargin": self._get(position, "isolatedMargin", 0.0, 4),
                     "updateTime": position.get("updateTime") or 0,
+                    "take_profit": self._opt_price(
+                        symbol,
+                        position.get("take_profit")
+                        or position.get("tp")
+                        or position.get("tp_price")
+                    ),
+                    "stop_loss": self._opt_price(
+                        symbol,
+                        position.get("stop_loss")
+                        or position.get("sl")
+                        or position.get("sl_price")
+                    ),
                 }
 
             # 各时间框架
@@ -539,45 +564,41 @@ class PromptBuilder:
   - `ohlcv`: open/high/low/change/volume  （舊→新）(權重:5%)
   - `boll`:  最近 10 筆 boll資料 (權重:15%)
   
-  - **decision_history（舊→新）**：請審視最近數筆紀錄，並遵循：
-  1) 避免「來回打臉」：若上次剛開倉，除非出現**反向強訊號**（如 MACD 零軸反轉 + KDJ 交叉 + RSI 位階改變），否則傾向持有或減倉，而非立即反手  
-  2) 若同方向連勝且多週期一致 ⇒ 可**小幅加槓桿/加倉**（不得超過上限）  
-  3) **具體化理由**：在 reason 中說明「相對於最近一次操作的變化點」（例：「上次 BUY_OPEN 後，4h MACD 由正轉負且 KDJ 死亡交叉，決定 CLOSE」）
-     - 若本次建議與上次歷史方向相反，請在 reason 中**明確列出反轉依據**（指標交叉、零軸穿越、布林結構改變、關鍵位失守/站回）
+  - **decision_history（舊→新）**：讓你參考最近數筆你做過的決策：
 
 #技術指標資料說明:
-- time_frame:1d 用來判斷大方向,空頭趨勢盡量做空,多頭趨勢盡量做多
+- time_frame:1d 用來判斷大方向
 - time_frame:1h,3m 用來判斷是否開倉,也可用來判斷是否獲利了結/停損
 - 可参考 market_data 内不同 time_frame 的 RSI/MACD/HIST/KDJ/BOLL 皆为「旧→新」序列）。
 - 每个币种下方含有该币的 decision_history（旧→新），可用以对齐你的建议与既有持仓/历史。
 - 依據各項指標權重加種判斷出本次多空方向
 
 #倉位说明：
+- 初始資金為1000
 - 每个币种单独决策，依市场状况 BUY_OPEN(作多)/SELL_OPEN(作空)/ADD_BUY_OPEN(加倉作多)/ADD_SELL_OPEN(加倉作空)
 - 若判断风险较高或趋势不明确，可使用 HOLD。HOLD時無需提供leverage/open_percent/take_profit/stop_loss
 - BUY_OPEN/SELL_OPEN 时务必提供合理止盈止损價位。 
-- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损價位
+- ADD_BUY_OPEN/ADD_SELL_OPEN 為加倉,加倉時需同時提供新的止盈止损價位,(參考當前position的take_profit/stop_loss 來做計算)
 - take_profit : 開倉價位加{self.config.get('risk', {}).get('take_profit_low', 1)} - {self.config.get('risk', {}).get('take_profit_high', 10)}%
 - stop_loss   : 開倉價位減{self.config.get('risk', {}).get('stop_loss_low', 1)} - {self.config.get('risk', {}).get('stop_loss_high', 10)}%
 - 我會根據你回傳的open_percent,leverage來開倉
   開倉所使用的保證金(isolatedMargin)為 equity*open_percent
   若所有艙位的isolatedMargin合超過equity的{100 - self.config.get('trading', {}).get('reserve_percent', 10)}%, 則不可開倉或加倉
+  各幣種的isolatedMargin不要超過 equity/幣種數量 
 - PARTIAL_CLOSE 為減倉, 只用來確保利潤,不用來減少損失 , 需帶入reduce_percent
-  1) 考慮減倉時,請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
-     得到的數字超過 {self.config.get('risk', {}).get('reduce_if_over', 10)}% 才能鎖定利潤
-  2) 根據前一個positionAfterExecution,比對這次的pnl_percent減少超過{self.config.get('risk', {}).get('reduce_if_fallback', 10)}%時, 可考慮鎖定利潤
-  3) 不可以連續三次PARTIAL_CLOSE,若判斷反轉請直接CLOSE
-  4) reduce_percent根據信心來設置,10-30%,若認為趨勢會延續,則設定低一點, 反之亦然
+  1) 不可以連續三次PARTIAL_CLOSE,若判斷反轉請直接CLOSE
+  2) reduce_percent根據信心來設置,10-40%
 - 若技術分析結果與市場情況相反,造成倉位浮虧的時候:
   請先把position物件內的 pnl_percent除以leverage (pnl_percent/leverage) 
   得到的數字超過 {self.config.get('risk', {}).get('position_tolerance', 10)}% 再考慮停損
 
-
 #額外說明
--不要只做多! 
--不要抄底摸頭追漲殺跌
--順向交易
--不要頻繁開倉關倉,有足夠信心再給開倉信號,不要一點虧損就賣出
+-不要只做一種方向
+-若要做與大方向(1d)不同的逆勢單:需要有足夠的理由及技術分析支持,槓桿跟倉位可以稍微降低
+-不要頻繁開倉關倉,不要一點虧損就賣出
+-若同方向連勝且多週期一致 ⇒ 可**小幅加槓桿/加倉**
+-**具體化理由**：在 reason 中說明「相對於最近一次操作的變化點」（例：「上次 BUY_OPEN 後，4h MACD 由正轉負且 KDJ 死亡交叉，決定 CLOSE」）
+-若本次建議與上次歷史方向相反，請在 reason 中**明確列出反轉依據**（指標交叉、零軸穿越、布林結構改變、關鍵位失守/站回）
 
 #当前时间
 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}

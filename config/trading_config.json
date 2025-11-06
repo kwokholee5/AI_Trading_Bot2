@@ -19,9 +19,9 @@
     "stop_loss_high": 10,
     "take_profit_low": 2,
     "take_profit_high": 10,
-    "reduce_if_over" : 3,
+    "reduce_if_over" : 1,
     "reduce_if_fallback" : 30,
-    "position_tolerance" : -3
+    "position_tolerance" : -2
   },
   "ai": {
     "model": "deepseek-reasoner",

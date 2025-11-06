@@ -7,6 +7,7 @@ import pathlib
 import time
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
+from src.utils.logger import get_logger
 
 
 @dataclass
@@ -24,7 +25,9 @@ class Position:
     isolated: bool
     opened_at: float          # epoch seconds
     meta: Dict[str, Any]
-
+    # ✅ 新增：推導得到的 TP / SL（若查不到則為 None）
+    take_profit: Optional[float] = None
+    stop_loss: Optional[float] = None
 
 class PositionDataManager:
     """
@@ -38,6 +41,7 @@ class PositionDataManager:
 
     def __init__(self, client=None, path: str = "data/positions.json"):
         # keep both: the wrapper (repo class) and the raw python-binance client
+        self.log = get_logger("debug")  # 專用交易 logger
         self.wrapper = client
         self.client = getattr(client, "client", client)
         self.path = pathlib.Path(path)
@@ -74,9 +78,11 @@ class PositionDataManager:
 
     def _fetch_all_exchange_positions(self) -> List[Position]:
         # 1) wrapper first
+        self.log.info("_fetch_all_exchange_positions")
         try:
             if self.wrapper and hasattr(self.wrapper, "get_all_positions"):
                 rows = self.wrapper.get_all_positions() or []
+                self.log.info(rows)
                 return [self._normalize_pos_dict(r.get("symbol", ""), r)
                         for r in rows
                         if float(r.get("positionAmt", 0)) != 0.0]
@@ -106,6 +112,7 @@ class PositionDataManager:
         isolated = (isolated_flag == "TRUE") or (isolated_flag == "ISOLATED")
 
         pnl_percent = (upnl / isolatedMargin) * 100
+        tp, sl = self._infer_tp_sl(symbol, side, entry)
         return Position(
             symbol=symbol,
             side=side,
@@ -120,6 +127,8 @@ class PositionDataManager:
             isolated=isolated,
             opened_at=time.time(),  # we don’t have exchange open time here
             meta=d,
+            take_profit=tp,
+            stop_loss=sl,
         )
 
     # ----------------- public API expected by main.py -----------------
@@ -130,6 +139,8 @@ class PositionDataManager:
         Exchange → fallback to local JSON.
         """
         pos = self._fetch_exchange_position(symbol)
+        self.log.info("get_current_position")
+        self.log.info(pos)
         if pos is None:
             # fallback to local cache
             cached = self.get(symbol)
@@ -151,6 +162,8 @@ class PositionDataManager:
             "isolated": pos.isolated,
             "opened_at": pos.opened_at,
             "meta": pos.meta,
+            "take_profit": pos.take_profit,    
+            "stop_loss": pos.stop_loss,         
         }
 
     def get_all_open_positions(self) -> List[Dict[str, Any]]:
@@ -178,12 +191,77 @@ class PositionDataManager:
                     "isolated": p.isolated,
                     "opened_at": p.opened_at,
                     "meta": p.meta,
+                    "take_profit": p.take_profit,    
+                    "stop_loss": p.stop_loss,         
                 })
             else:
                 # already a dict (from local cache)
                 out.append(p)
         return out
 
+    def _infer_tp_sl(self, symbol: str, side: str, entry_price: float) -> (Optional[float], Optional[float]):
+        """
+        從 wrapper.list_close_orders(symbol) 推導目前倉位的 TP / SL。
+        規則：
+          - 來源：TAKE_PROFIT(_MARKET)、STOP(_MARKET) 且 closePosition/reduceOnly 為 True 的 open orders
+          - LONG：TP > entry, SL < entry；若多張符合，TP 取最小的 > entry，SL 取最大的 < entry
+          - SHORT：TP < entry, SL > entry；若多張符合，TP 取最大的 < entry，SL 取最小的 > entry
+        """
+        try:
+            if not (self.wrapper and hasattr(self.wrapper, "list_close_orders")):
+                return None, None
+
+            orders = self.wrapper.list_close_orders(symbol) or []
+            entry = float(entry_price) if entry_price else 0.0
+
+            tp_candidates: List[float] = []
+            sl_candidates: List[float] = []
+
+            for o in orders:
+                t = str(o.get("type", "")).upper()
+                sp = o.get("stopPrice") or o.get("price")
+                try:
+                    p = float(sp)
+                except Exception:
+                    continue
+
+                # 依訂單類型先粗分
+                is_tp_type = t in {"TAKE_PROFIT", "TAKE_PROFIT_MARKET"}
+                is_sl_type = t in {"STOP", "STOP_MARKET"}
+
+                # 方向/相對於 entry 的條件
+                if side == "LONG":
+                    if is_tp_type and p > entry > 0:
+                        tp_candidates.append(p)
+                    if is_sl_type and (entry == 0 or p < entry):
+                        sl_candidates.append(p)
+                else:  # SHORT
+                    if is_tp_type and (entry == 0 or p < entry):
+                        tp_candidates.append(p)
+                    if is_sl_type and p > entry > 0:
+                        sl_candidates.append(p)
+
+            tp = None
+            sl = None
+            if side == "LONG":
+                # TP 取最接近 entry 的較高價（> entry 的最小值）
+                if tp_candidates:
+                    tp = min(tp_candidates)
+                # SL 取最接近 entry 的較低價（< entry 的最大值）
+                if sl_candidates:
+                    sl = max(sl_candidates)
+            else:
+                # SHORT：TP 取 < entry 的最大值
+                if tp_candidates:
+                    tp = max(tp_candidates)
+                # SHORT：SL 取 > entry 的最小值
+                if sl_candidates:
+                    sl = min(sl_candidates)
+
+            return tp, sl
+        except Exception as e:
+            self.log.info(f"_infer_tp_sl error {symbol}: {e}")
+            return None, None
     # ----------------- local cache convenience -----------------
 
     def list_open(self) -> List[Position]:
