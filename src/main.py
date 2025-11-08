@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, List
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.api.hedge_client import HedgeClient
 from src.api.binance_client import BinanceClient
 from src.config.config_loader import ConfigLoader
 from src.config.env_manager import EnvManager
@@ -21,6 +22,7 @@ from src.data.market_data import MarketDataManager
 from src.data.position_data import PositionDataManager
 from src.data.account_data import AccountDataManager
 from src.trading.trade_executor import TradeExecutor
+from src.trading.hedger import Hedger
 from src.trading.position_manager import PositionManager
 from src.trading.risk_manager import RiskManager
 from src.ai.deepseek_client import DeepSeekClient
@@ -41,6 +43,7 @@ class TradingBot:
         self.log_prompt = get_logger("prompt")
         self.log_debug = get_logger("debug")
         self.log_binance_client = get_logger("binance_client")
+        self.log_hedge = get_logger("hedge")
         """初始化交易机器人"""
         self.log_ai.info("=" * 60)
         self.log_ai.info("🚀 AI交易机器人启动中...")
@@ -56,6 +59,7 @@ class TradingBot:
         
         # 初始化客户端
         self.client = self._init_binance_client()
+        self.client_hedge = self._init_binance_client_hedge()
         self.ai_client = self._init_ai_client()
         self.log_ai.info(f"✅ API客户端初始化完成")
         
@@ -66,7 +70,8 @@ class TradingBot:
         self.log_ai.info(f"✅ 数据管理器初始化完成")
         
         # 初始化交易执行器和风险管理器
-        self.trade_executor = TradeExecutor(self.client, self.config)
+        self.trade_executor = TradeExecutor(self.client ,  self.config)
+        self.hedger = Hedger(self.client_hedge , self.config)
         self.position_manager = PositionManager(self.client)
         self.risk_manager = RiskManager(self.config)
         self.log_ai.info(f"✅ 交易执行器初始化完成")
@@ -175,6 +180,14 @@ class TradingBot:
         
         return BinanceClient(api_key=api_key, api_secret=api_secret)
     
+    def _init_binance_client_hedge(self) -> HedgeClient:
+        """初始化Binance客户端（正式网）"""
+        api_key, api_secret = EnvManager.get_api_credentials_hedge()
+        if not api_key or not api_secret:
+            raise ValueError("API凭证未配置")
+        
+        return HedgeClient(api_key=api_key, api_secret=api_secret)
+    
     def _init_ai_client(self) -> DeepSeekClient:
         """初始化DeepSeek客户端"""
         api_key = EnvManager.get_deepseek_key()
@@ -187,7 +200,7 @@ class TradingBot:
     def get_market_data_for_symbol(self, symbol: str) -> Dict[str, Any]:
         """获取单个币种的市场数据"""
         # 多周期K线
-        intervals = ['3m', '1h' , "4h" , '1d']
+        intervals = ["3m", "1h", "1d"]
         multi_timeframe = self.market_data.get_multi_timeframe_data(symbol, intervals)
         
         # 实时行情
@@ -387,6 +400,8 @@ class TradingBot:
                     self.log_ai.info(f"⚠️ {symbol} 部分減倉比例無效: {pct}")
                     return
                 self.trade_executor.close_position_partial(symbol, pct / 100.0)
+                self.hedger.close_position_partial(symbol, pct / 100.0)
+
 
 
         except Exception as e:
@@ -439,6 +454,13 @@ class TradingBot:
                 leverage=leverage,
                 take_profit=take_profit,
                 stop_loss=stop_loss
+            )
+            self.hedger.open_short(
+                symbol=symbol,
+                quantity=quantity*4,
+                leverage=leverage,
+                take_profit=stop_loss,
+                stop_loss=take_profit
             )
             self.log_ai.info(f"✅ {symbol} 开多仓成功")
             self.trade_count += 1
@@ -493,6 +515,13 @@ class TradingBot:
                 take_profit=take_profit,
                 stop_loss=stop_loss
             )
+            self.hedger.open_long(
+                symbol=symbol,
+                quantity=quantity*4,
+                leverage=leverage,
+                take_profit=stop_loss,
+                stop_loss=take_profit
+            )
             self.log_ai.info(f"✅ {symbol} 开空仓成功")
             self.trade_count += 1
         except Exception as e:
@@ -502,6 +531,7 @@ class TradingBot:
         """平仓"""
         try:
             self.trade_executor.close_position(symbol)
+            self.hedger.close_position(symbol)
             self.log_ai.info(f"✅ {symbol} 平仓成功")
             self.trade_count += 1
         except Exception as e:

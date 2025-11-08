@@ -5,16 +5,16 @@
 import time
 from typing import Dict, Any, Optional
 
-from src.api.binance_client import BinanceClient
+from src.api.hedge_client import HedgeClient
 from src.utils.decorators import retry_on_failure, log_execution
 from src.utils.symbol_filters import SymbolFilters
 from src.utils.logger import get_logger
 
 
-class TradeExecutor:
+class Hedger:
     """交易执行器"""
 
-    def __init__(self, client: BinanceClient, config: Dict[str, Any]):
+    def __init__(self, client: HedgeClient, config: Dict[str, Any]):
         """
         初始化交易执行器
 
@@ -25,8 +25,8 @@ class TradeExecutor:
         self.client = client
         self.config = config
         self.position_manager = None  # 将在外部设置
-        self.log = get_logger("trade")  # 專用交易 logger
-        print(self.client)
+        self.log = get_logger("hedge")  # 專用交易 logger
+        self.log.info("hedge init")
     # --------------------- 内部工具 ---------------------
 
     def _get_filters(self, symbol: str) -> SymbolFilters:
@@ -86,7 +86,7 @@ class TradeExecutor:
                 self.client.change_leverage(symbol, leverage)
                 time.sleep(0.5)  # 等待杠杆调整生效
             except Exception as e:
-                print(f"⚠️ 调整杠杆失败（继续开仓）: {e}")
+                self.log.info(f"⚠️ 调整杠杆失败（继续开仓）: {e}")
 
         # 量化数量 & 名义金额检查
         adj_qty, _, used_price = self._ensure_qty_price(symbol, quantity)
@@ -100,7 +100,7 @@ class TradeExecutor:
                 side='BUY',
                 quantity=adj_qty
             )
-            print(f"✅ 开多仓成功: {symbol} {adj_qty}")
+            self.log.info(f"✅ 开多仓成功: {symbol} {adj_qty}")
 
             # 设置止盈止损（量化 stopPrice）
             if take_profit or stop_loss:
@@ -116,7 +116,7 @@ class TradeExecutor:
 
             return order
         except Exception as e:
-            print(f"❌ 开多仓失败: {e}")
+            self.log.info(f"❌ 开多仓失败: {e}")
             raise
 
     @log_execution
@@ -133,7 +133,7 @@ class TradeExecutor:
                 self.client.change_leverage(symbol, leverage)
                 time.sleep(0.5)
             except Exception as e:
-                print(f"⚠️ 调整杠杆失败（继续开仓）: {e}")
+                self.log.info(f"⚠️ 调整杠杆失败（继续开仓）: {e}")
 
         # 量化数量 & 名义金额检查
         adj_qty, _, used_price = self._ensure_qty_price(symbol, quantity)
@@ -147,7 +147,7 @@ class TradeExecutor:
                 side='SELL',
                 quantity=adj_qty
             )
-            print(f"✅ 开空仓成功: {symbol} {adj_qty}")
+            self.log.info(f"✅ 开空仓成功: {symbol} {adj_qty}")
 
             # 设置止盈止损（量化 stopPrice）
             if take_profit or stop_loss:
@@ -163,7 +163,7 @@ class TradeExecutor:
 
             return order
         except Exception as e:
-            print(f"❌ 开空仓失败: {e}")
+            self.log.info(f"❌ 开空仓失败: {e}")
             raise
 
     # ==================== 平仓 ====================
@@ -179,7 +179,7 @@ class TradeExecutor:
         try:
             position = self.client.get_position(symbol)
             if not position or float(position['positionAmt']) == 0:
-                print(f"⚠️ {symbol} 无持仓")
+                self.log.info(f"⚠️ {symbol} 无持仓")
                 return None
 
             # 持仓方向：正数=多仓 → 用 SELL 平；负数=空仓 → 用 BUY 平
@@ -196,7 +196,7 @@ class TradeExecutor:
             # 量化平仓数量（有的symbol需要按stepSize）
             adj_qty, _, _ = self._ensure_qty_price(symbol, amount)
             if float(adj_qty) <= 0:
-                print(f"⚠️ {symbol} 平仓数量量化后为0，跳过")
+                self.log.info(f"⚠️ {symbol} 平仓数量量化后为0，跳过")
                 return None
 
             order = self.client.create_market_order(
@@ -204,11 +204,11 @@ class TradeExecutor:
                 side=side,
                 quantity=adj_qty
             )
-            print(f"✅ 平仓成功: {symbol} {side} {adj_qty}")
+            self.log.info(f"✅ 平仓成功: {symbol} {side} {adj_qty}")
             return order
 
         except Exception as e:
-            print(f"❌ 平仓失败 {symbol}: {e}")
+            self.log.info(f"❌ 平仓失败 {symbol}: {e}")
             raise
 
     def close_position_partial(self, symbol: str, percentage: float) -> Optional[Dict[str, Any]]:
@@ -222,7 +222,7 @@ class TradeExecutor:
         try:
             position = self.client.get_position(symbol)
             if not position or float(position['positionAmt']) == 0:
-                print(f"⚠️ {symbol} 无持仓")
+                self.log.info(f"⚠️ {symbol} 无持仓")
                 return None
 
             total_amount = abs(float(position['positionAmt']))
@@ -233,7 +233,7 @@ class TradeExecutor:
             # 量化数量 & 名义金额检查
             adj_qty, _, _ = self._ensure_qty_price(symbol, close_amount)
             if float(adj_qty) <= 0:
-                print(f"⚠️ {symbol} 部分平仓数量量化后为0，跳过")
+                self.log.info(f"⚠️ {symbol} 部分平仓数量量化后为0，跳过")
                 return None
 
             order = self.client.create_market_order(
@@ -243,16 +243,16 @@ class TradeExecutor:
                 reduceOnly=True   # ← 關鍵：確保只會減少現有倉位
             )
 
-            print(f"✅ 部分平仓成功: {symbol} {adj_qty} ({percentage*100}%)")
+            self.log.info(f"✅ 部分平仓成功: {symbol} {adj_qty} ({percentage*100}%)")
             return order
 
         except Exception as e:
-            print(f"❌ 部分平仓失败 {symbol}: {e}")
+            self.log.info(f"❌ 部分平仓失败 {symbol}: {e}")
             raise
 
     def force_close_position(self, symbol: str, reason: str) -> Optional[Dict[str, Any]]:
         """强制平仓（风控触发）"""
-        print(f"🚨 强制平仓: {symbol}, 原因: {reason}")
+        self.log.info(f"🚨 强制平仓: {symbol}, 原因: {reason}")
         return self.close_position(symbol)
 
     # ==================== 止盈止损 ====================
@@ -277,12 +277,12 @@ class TradeExecutor:
             )
 
             if tp:
-                print(f"   📈 止盈价: ${self._fmt_price(tp)}")
+                self.log.info(f"   📈 止盈价: ${self._fmt_price(tp)}")
             if sl:
-                print(f"   🛑 止损价: ${self._fmt_price(sl)}")
+                self.log.info(f"   🛑 止损价: ${self._fmt_price(sl)}")
 
         except Exception as e:
-            print(f"⚠️ 设置止盈止损失败: {e}")
+            self.log.info(f"⚠️ 设置止盈止损失败: {e}")
     
     def update_take_profit_stop_loss(self, symbol: str, side: str,
                                  quantity: float,
@@ -297,7 +297,7 @@ class TradeExecutor:
             try:
                 self.client.cancel_close_orders(symbol)
             except Exception as e:
-                print(f"⚠️ 清除舊 TP/SL 失敗（繼續覆蓋）: {e}")
+                self.log.info(f"⚠️ 清除舊 TP/SL 失敗（繼續覆蓋）: {e}")
 
             # 再設新的
             tp, sl = self._quantize_stop_prices(symbol, take_profit, stop_loss)
@@ -310,9 +310,9 @@ class TradeExecutor:
             )
 
             if tp:
-                print(f"   📈 新止盈價: ${self._fmt_price(tp)}")
+                self.log.info(f"   📈 新止盈價: ${self._fmt_price(tp)}")
             if sl:
-                print(f"   🛑 新止損價: ${self._fmt_price(sl)}")
+                self.log.info(f"   🛑 新止損價: ${self._fmt_price(sl)}")
 
         except Exception as e:
-            print(f"⚠️ 更新 TP/SL 失敗: {e}")
+            self.log.info(f"⚠️ 更新 TP/SL 失敗: {e}")

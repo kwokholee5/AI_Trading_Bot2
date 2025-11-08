@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any
 from functools import lru_cache
 from src.utils.logger import get_logger
 
-class BinanceClient:
+class HedgeClient:
     """Binance API客户端封装"""
     
     def __init__(self, api_key: Optional[str] = None, 
@@ -27,7 +27,7 @@ class BinanceClient:
             timeout: 请求超时时间（秒）
         """
         print(api_key)
-        self.log = get_logger("binance_client")  # 專用交易 logger
+        self.log = get_logger("hedge")  # 專用交易 logger
         self.api_key = api_key
         self.api_secret = api_secret
         self.timeout = timeout

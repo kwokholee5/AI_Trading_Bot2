@@ -36,6 +36,7 @@ class EnvManager:
         Returns:
             (api_key, api_secret)
         """
+        
         api_key = os.getenv('BINANCE_API_KEY')
         api_secret = os.getenv('BINANCE_SECRET')
         
@@ -44,6 +45,21 @@ class EnvManager:
         
         return api_key, api_secret
     
+    @staticmethod
+    def get_api_credentials_hedge() -> Tuple[Optional[str], Optional[str]]:
+        """
+        获取API凭证
+        
+        Returns:
+            (api_key, api_secret)
+        """
+        api_key = os.getenv('BINANCE_API_KEY_HEDGE')
+        api_secret = os.getenv('BINANCE_SECRET_HEDGE')
+        
+        if not api_key or not api_secret:
+            print(f"⚠️ API凭证未配置")
+        
+        return api_key, api_secret
     @staticmethod
     def get_deepseek_key() -> Optional[str]:
         """获取DeepSeek API密钥"""

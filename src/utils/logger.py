@@ -78,7 +78,11 @@ def init_all_loggers() -> dict[str, logging.Logger]:
     binance_client.setLevel(logging.INFO)
     _ensure_handlers(binance_client, [_build_file_handler("binance_client.log", logging.INFO)])
 
-    return {"ai": ai_logger, "trade": trade_logger, "system": system_logger , "prompt": prompt_logger , "debug" : debug_logger , "binance_client" : binance_client}
+    hedge = logging.getLogger("hedge")
+    hedge.setLevel(logging.INFO)
+    _ensure_handlers(hedge, [_build_file_handler("hedge.log", logging.INFO)])
+    
+    return {"hedge" : hedge ,"ai": ai_logger, "trade": trade_logger, "system": system_logger , "prompt": prompt_logger , "debug" : debug_logger , "binance_client" : binance_client}
 
 def get_logger(name: str) -> logging.Logger:
     """
@@ -90,7 +94,8 @@ def get_logger(name: str) -> logging.Logger:
         "system": ("system.log",),
         "prompt": ("prompt.log"),
         "debug" : ("debug.log"),
-        "binance_client" : ("binance_client.log")
+        "binance_client" : ("binance_client.log"),
+        "hedge" :("hedge.log")
     }
     logger = logging.getLogger(name)
     if not logger.handlers:
