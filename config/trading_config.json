@@ -1,10 +1,10 @@
 {
   "trading": {
-    "symbols": ["BTCUSDT" , "ETHUSDT" , "SOLUSDT" , "DOGEUSDT" , "XRPUSDT"],
-    "default_leverage": 3,
+    "symbols": ["BTCUSDT" , "ETHUSDT" , "SOLUSDT", "BNBUSDT", "HYPEUSDT"],
+    "default_leverage": 2,
     "max_leverage": 5,
-    "min_position_percent": 10,
-    "max_position_percent": 15,
+    "min_position_percent": 1,
+    "max_position_percent": 5,
     "reserve_percent": 20
   },
   "paths": {
@@ -21,16 +21,16 @@
     "take_profit_high": 10,
     "reduce_if_over" : 2,
     "reduce_if_fallback" : 30,
-    "position_tolerance" : 4
+    "position_tolerance" : 10
   },
   "ai": {
     "model": "deepseek-reasoner",
     "temperature": 0.7,
-    "max_tokens": 10000,
-    "hedge" : true
+    "max_tokens": 20000,
+    "hedge" : false
   },
   "schedule": {
-    "interval_seconds": 180,
+    "interval_seconds": 600,
     "retry_times": 3,
     "retry_delay_seconds": 5
   }
