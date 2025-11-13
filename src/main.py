@@ -59,19 +59,31 @@ class TradingBot:
         
         # 初始化客户端
         self.client = self._init_binance_client()
-        self.client_hedge = self._init_binance_client_hedge()
+
+        # 检查是否启用对冲功能
+        hedge_enabled = EnvManager.is_hedge_enabled()
+        if hedge_enabled:
+            self.client_hedge = self._init_binance_client_hedge()
+            self.log_ai.info(f"✅ 对冲功能已启用")
+        else:
+            self.client_hedge = None
+            self.log_ai.info(f"⚠️ 对冲功能已禁用")
+
         self.ai_client = self._init_ai_client()
         self.log_ai.info(f"✅ API客户端初始化完成")
-        
+
         # 初始化管理器
         self.market_data = MarketDataManager(self.client)
         self.position_data = PositionDataManager(self.client)
         self.account_data = AccountDataManager(self.client)
         self.log_ai.info(f"✅ 数据管理器初始化完成")
-        
+
         # 初始化交易执行器和风险管理器
         self.trade_executor = TradeExecutor(self.client ,  self.config)
-        self.hedger = Hedger(self.client_hedge , self.config)
+        if self.client_hedge:
+            self.hedger = Hedger(self.client_hedge , self.config)
+        else:
+            self.hedger = None
         self.position_manager = PositionManager(self.client)
         self.risk_manager = RiskManager(self.config)
         self.log_ai.info(f"✅ 交易执行器初始化完成")
@@ -95,7 +107,10 @@ class TradingBot:
         # 状态追踪（從本地載入歷史）
         self.decision_history: List[Dict[str, Any]] = self._load_decision_history(self.history_file, self.max_history)
         self.trade_count = 0
-        
+
+        # 发送账户摘要到Discord
+        self._send_startup_summary_to_discord()
+
         self.log_ai.info("=" * 60)
         self.log_ai.info("🎉 AI交易机器人启动成功！")
         self.log_ai.info("=" * 60)
@@ -162,6 +177,53 @@ class TradingBot:
             os.replace(tmp, path)
         except Exception as e:
             self.log_ai.info(f"⚠️ 壓縮歷史檔案失敗: {e}")
+
+    def _send_startup_summary_to_discord(self):
+        """
+        发送账户摘要到Discord（包含账户标签）
+        """
+        try:
+            # 获取账户摘要
+            account_summary = self.account_data.get_account_summary()
+            if not account_summary:
+                return
+
+            # 获取所有持仓
+            open_positions = self.position_data.get_all_open_positions()
+
+            # 构建消息内容
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            content = f"🚀 **交易机器人启动** @ {now_str}\n\n"
+            content += "📊 **账户摘要**\n"
+            content += f"总权益: {account_summary.get('equity', 0):.2f} USDT\n"
+            content += f"可用余额: {account_summary.get('available_balance', 0):.2f} USDT\n"
+            content += f"未实现盈亏: {account_summary.get('total_unrealized_pnl', 0):.2f} USDT\n"
+            content += f"保证金率: {account_summary.get('margin_ratio', 0):.2f}%\n"
+
+            # 添加持仓信息
+            if open_positions:
+                content += f"\n📈 **当前持仓** ({len(open_positions)}个)\n"
+                for pos in open_positions:
+                    symbol = pos.get('symbol', 'N/A')
+                    side = pos.get('side', 'N/A')
+                    position_amt = pos.get('positionAmt', 0)
+                    entry_price = pos.get('entry_price', 0)
+                    mark_price = pos.get('mark_price', 0)
+                    unrealized_pnl = pos.get('unrealized_pnl', 0)
+                    pnl_percent = pos.get('pnl_percent', 0)
+
+                    pnl_sign = "+" if unrealized_pnl >= 0 else ""
+                    content += f"{symbol} {side}: {position_amt:.4f}\n"
+                    content += f"  入场: {entry_price:.2f} | 标记: {mark_price:.2f}\n"
+                    content += f"  盈亏: {pnl_sign}{unrealized_pnl:.2f} USDT ({pnl_sign}{pnl_percent:.2f}%)\n"
+            else:
+                content += "\n📈 **当前持仓**: 无\n"
+
+            # 发送到Discord（会自动包含账户标签）
+            notify_discord(content)
+
+        except Exception as e:
+            self.log_ai.info(f"⚠️ 发送启动摘要到Discord失败: {e}")
 
     def _build_precision_map(self, symbols: list[str]) -> Dict[str, Dict[str, int]]:
         pm: Dict[str, Dict[str, int]] = {}
@@ -400,7 +462,8 @@ class TradingBot:
                     self.log_ai.info(f"⚠️ {symbol} 部分減倉比例無效: {pct}")
                     return
                 self.trade_executor.close_position_partial(symbol, pct / 100.0)
-                self.hedger.close_position_partial(symbol, pct / 100.0)
+                if self.hedger:
+                    self.hedger.close_position_partial(symbol, pct / 100.0)
 
 
 
@@ -455,13 +518,14 @@ class TradingBot:
                 take_profit=take_profit,
                 stop_loss=stop_loss
             )
-            self.hedger.open_short(
-                symbol=symbol,
-                quantity=quantity*4,
-                leverage=leverage,
-                take_profit=stop_loss,
-                stop_loss=take_profit
-            )
+            if self.hedger:
+                self.hedger.open_short(
+                    symbol=symbol,
+                    quantity=quantity*4,
+                    leverage=leverage,
+                    take_profit=stop_loss,
+                    stop_loss=take_profit
+                )
             self.log_ai.info(f"✅ {symbol} 开多仓成功")
             self.trade_count += 1
         except Exception as e:
@@ -515,13 +579,14 @@ class TradingBot:
                 take_profit=take_profit,
                 stop_loss=stop_loss
             )
-            self.hedger.open_long(
-                symbol=symbol,
-                quantity=quantity*4,
-                leverage=leverage,
-                take_profit=stop_loss,
-                stop_loss=take_profit
-            )
+            if self.hedger:
+                self.hedger.open_long(
+                    symbol=symbol,
+                    quantity=quantity*4,
+                    leverage=leverage,
+                    take_profit=stop_loss,
+                    stop_loss=take_profit
+                )
             self.log_ai.info(f"✅ {symbol} 开空仓成功")
             self.trade_count += 1
         except Exception as e:
@@ -531,7 +596,8 @@ class TradingBot:
         """平仓"""
         try:
             self.trade_executor.close_position(symbol)
-            self.hedger.close_position(symbol)
+            if self.hedger:
+                self.hedger.close_position(symbol)
             self.log_ai.info(f"✅ {symbol} 平仓成功")
             self.trade_count += 1
         except Exception as e:

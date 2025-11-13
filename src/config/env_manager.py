@@ -65,6 +65,22 @@ class EnvManager:
         """获取DeepSeek API密钥"""
         return os.getenv('DEEPSEEK_API_KEY')
     
+    @staticmethod
+    def get_discord_webhook_url() -> Optional[str]:
+        """获取Discord webhook URL"""
+        return os.getenv('DISCORD_WEBHOOK_URL')
+    
+    @staticmethod
+    def get_discord_account_tag() -> Optional[str]:
+        """获取Discord账户标签，用于标识不同的交易账户"""
+        return os.getenv('DISCORD_ACCOUNT_TAG')
+
+    @staticmethod
+    def is_hedge_enabled() -> bool:
+        """检查是否启用对冲功能"""
+        value = os.getenv('HEDGE_ENABLED', 'false').lower()
+        return value in ('true', '1', 'yes', 'on')
+    
     
     @staticmethod
     def require_env(key: str, error_msg: str = None) -> str:
